@@ -1,0 +1,39 @@
+package com.example.demo.pricing;
+
+import com.example.demo.player.Player;
+import jakarta.persistence.*;
+import java.time.Instant;
+
+@Entity
+public class PriceHistory {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne
+    private Player player;
+
+    private Double price;
+    private Double fantasyPoints;
+    private String gameDate;
+    private Instant recordedAt;
+
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+
+    public Player getPlayer() { return player; }
+    public void setPlayer(Player player) { this.player = player; }
+
+    public Double getPrice() { return price; }
+    public void setPrice(Double price) { this.price = price; }
+
+    public Double getFantasyPoints() { return fantasyPoints; }
+    public void setFantasyPoints(Double fantasyPoints) { this.fantasyPoints = fantasyPoints; }
+
+    public String getGameDate() { return gameDate; }
+    public void setGameDate(String gameDate) { this.gameDate = gameDate; }
+
+    public Instant getRecordedAt() { return recordedAt; }
+    public void setRecordedAt(Instant recordedAt) { this.recordedAt = recordedAt; }
+}
