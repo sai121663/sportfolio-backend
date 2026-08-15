@@ -8,6 +8,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,6 +23,29 @@ public class MlbClient {
 
     private static final String HOST = "tank01-mlb-live-in-game-real-time-statistics.p.rapidapi.com";
     private final RestTemplate restTemplate = new RestTemplate();
+
+    // getPlayerNameMap / getProjections / getAdpMap all return data that barely
+    // changes day to day (the full player list, season-long projections, draft
+    // rankings) -- but ingestMlbFantasyData() used to call all three fresh on
+    // EVERY date it processed, which meant a 14-day backfill made 14x as many
+    // of these calls as necessary, for identical data every time. Caching them
+    // in memory for 24 hours means a whole backfill (or a whole day's worth of
+    // scheduled runs) reuses one fetch instead of re-pulling the same thing
+    // over and over -- this is what was burning through the monthly quota.
+    private static final long CACHE_TTL_HOURS = 24;
+
+    private Map<String, String> cachedNameMap;
+    private Instant nameMapCachedAt;
+
+    private Map<String, Tank01Dtos.PlayerProjection> cachedProjections;
+    private Instant projectionsCachedAt;
+
+    private Map<String, Double> cachedAdpMap;
+    private Instant adpMapCachedAt;
+
+    private boolean isExpired(Instant cachedAt) {
+        return cachedAt == null || ChronoUnit.HOURS.between(cachedAt, Instant.now()) >= CACHE_TTL_HOURS;
+    }
 
     private HttpHeaders buildHeaders() {
         HttpHeaders headers = new HttpHeaders();
@@ -61,6 +86,10 @@ public class MlbClient {
     }
 
     public Map<String, String> getPlayerNameMap() {
+        if (!isExpired(nameMapCachedAt)) {
+            return cachedNameMap;
+        }
+
         String url = "https://" + HOST + "/getMLBPlayerList";
         HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());
         Tank01Dtos.MlbPlayerListResponse response = restTemplate.exchange(
@@ -73,10 +102,17 @@ public class MlbClient {
                 nameMap.put(p.playerID, p.longName);
             }
         }
+
+        cachedNameMap = nameMap;
+        nameMapCachedAt = Instant.now();
         return nameMap;
     }
 
     public Map<String, Tank01Dtos.PlayerProjection> getProjections() {
+        if (!isExpired(projectionsCachedAt)) {
+            return cachedProjections;
+        }
+
         String url = UriComponentsBuilder.fromUriString("https://" + HOST + "/getMLBProjections")
                 .queryParam("projectionType", "7")
                 .queryParam("fantasyPoints", "true")
@@ -89,13 +125,21 @@ public class MlbClient {
                 url, HttpMethod.GET, entity, Tank01Dtos.ProjectionsResponse.class
         ).getBody();
 
-        if (response == null || response.body == null || response.body.playerProjections == null) {
-            return Map.of();
-        }
-        return response.body.playerProjections;
+        Map<String, Tank01Dtos.PlayerProjection> projections =
+                (response == null || response.body == null || response.body.playerProjections == null)
+                        ? Map.of()
+                        : response.body.playerProjections;
+
+        cachedProjections = projections;
+        projectionsCachedAt = Instant.now();
+        return projections;
     }
 
     public Map<String, Double> getAdpMap() {
+        if (!isExpired(adpMapCachedAt)) {
+            return cachedAdpMap;
+        }
+
         String url = "https://" + HOST + "/getMLBADP";
         HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());
         Tank01Dtos.AdpResponse response = restTemplate.exchange(
@@ -114,6 +158,9 @@ public class MlbClient {
                 }
             }
         }
+
+        cachedAdpMap = adpMap;
+        adpMapCachedAt = Instant.now();
         return adpMap;
     }
 }
