@@ -57,31 +57,49 @@ public class AdminIngestionController {
                 + "), " + totalRecords + " total records ingested.";
     }
 
-    // TEMPORARY -- dumps every price_history row that has a raw stat line
-    // attached, one JSON object per line (not a single array), so it's easy
-    // to transfer and parse line-by-line. Each line is
-    // {position, fantasyPoints, gameDate, rawStats}. This is the data we use
-    // to solve for Tank01's real scoring formula: comparing many known
-    // (raw stats -> fantasy points) pairs.
+    // TEMPORARY -- dumps price_history rows that have a raw stat line attached,
+    // one JSON object per line, PAGINATED so large exports can be pulled down
+    // in controlled chunks instead of one giant response. Use ?offset=0&limit=300,
+    // then ?offset=300&limit=300, etc. until a page comes back empty.
     @GetMapping("/admin/export-raw-stats")
-    public String exportRawStats() {
+    public String exportRawStats(
+            @RequestParam(defaultValue = "0") int offset,
+            @RequestParam(defaultValue = "300") int limit
+    ) {
         List<PriceHistory> all = priceHistoryRepository.findAll();
 
         StringBuilder json = new StringBuilder();
+        int matched = 0;
+        int emitted = 0;
         for (PriceHistory record : all) {
             String rawStats = record.getRawStatsJson();
             if (rawStats == null || rawStats.isEmpty() || rawStats.equals("{}")) continue;
 
-            String position = (record.getPlayer() != null && record.getPlayer().getPosition() != null)
-                    ? record.getPlayer().getPosition() : "";
+            if (matched >= offset && emitted < limit) {
+                String position = (record.getPlayer() != null && record.getPlayer().getPosition() != null)
+                        ? record.getPlayer().getPosition() : "";
 
-            json.append("{");
-            json.append("\"position\":\"").append(position.replace("\"", "\\\"")).append("\",");
-            json.append("\"fantasyPoints\":").append(record.getFantasyPoints() != null ? record.getFantasyPoints() : 0.0).append(",");
-            json.append("\"gameDate\":\"").append(record.getGameDate()).append("\",");
-            json.append("\"rawStats\":").append(rawStats);
-            json.append("}\n");
+                json.append("{");
+                json.append("\"position\":\"").append(position.replace("\"", "\\\"")).append("\",");
+                json.append("\"fantasyPoints\":").append(record.getFantasyPoints() != null ? record.getFantasyPoints() : 0.0).append(",");
+                json.append("\"gameDate\":\"").append(record.getGameDate()).append("\",");
+                json.append("\"rawStats\":").append(rawStats);
+                json.append("}\n");
+                emitted++;
+            }
+            matched++;
         }
         return json.toString();
+    }
+
+    // TEMPORARY -- quick way to check how many total records are available to
+    // export, so you know how many pages you'll need to pull.
+    @GetMapping("/admin/export-raw-stats/count")
+    public String countRawStats() {
+        List<PriceHistory> all = priceHistoryRepository.findAll();
+        long count = all.stream()
+                .filter(r -> r.getRawStatsJson() != null && !r.getRawStatsJson().isEmpty() && !r.getRawStatsJson().equals("{}"))
+                .count();
+        return "Total records with raw stats: " + count;
     }
 }
