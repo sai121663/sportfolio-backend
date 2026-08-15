@@ -8,11 +8,15 @@ import com.example.demo.trading.Trade;
 import com.example.demo.trading.TradeRepository;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
 public class PlayerCardService {
+
+    private static final DateTimeFormatter GAME_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     private final PriceHistoryRepository priceHistoryRepository;
     private final HoldingRepository holdingRepository;
@@ -85,14 +89,30 @@ public class PlayerCardService {
             dto.seasonLow = allPrices.stream().min(Double::compareTo).orElse(player.getPrice());
 
             double latest = allPrices.get(allPrices.size() - 1);
-            if (allPrices.size() >= 2) {
-                double previous = allPrices.get(allPrices.size() - 2);
-                dto.priceChange = latest - previous;
-                dto.priceChangePercent = previous != 0 ? (dto.priceChange / previous) * 100.0 : 0.0;
-            } else {
-                dto.priceChange = 0.0;
-                dto.priceChangePercent = 0.0;
+
+            // Compare against the price from roughly a week ago, not just the
+            // previous day, so the card reflects the past week's movement.
+            // If we don't have a full week of history yet, fall back to the
+            // oldest price we do have.
+            PriceHistory latestRecord = sortedHistory.get(sortedHistory.size() - 1);
+            LocalDate latestDate = LocalDate.parse(latestRecord.getGameDate(), GAME_DATE_FORMAT);
+            LocalDate weekAgoTarget = latestDate.minusDays(7);
+
+            Double weekAgoPrice = null;
+            for (PriceHistory record : sortedHistory) {
+                LocalDate recordDate = LocalDate.parse(record.getGameDate(), GAME_DATE_FORMAT);
+                if (!recordDate.isAfter(weekAgoTarget)) {
+                    weekAgoPrice = record.getPrice();
+                } else {
+                    break;
+                }
             }
+            if (weekAgoPrice == null) {
+                weekAgoPrice = allPrices.get(0);
+            }
+
+            dto.priceChange = latest - weekAgoPrice;
+            dto.priceChangePercent = weekAgoPrice != 0 ? (dto.priceChange / weekAgoPrice) * 100.0 : 0.0;
         } else {
             dto.priceHistory = List.of();
             dto.seasonHigh = player.getPrice();
