@@ -6,6 +6,7 @@ public class PlayerCardDto {
     public Long id;
     public String name;
     public String team;
+    public Integer teamId;
     public String sport;
     public Double price;
     public String imageUrl;

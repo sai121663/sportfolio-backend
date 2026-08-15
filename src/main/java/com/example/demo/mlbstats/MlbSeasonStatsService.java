@@ -49,6 +49,9 @@ public class MlbSeasonStatsService {
                     if (pitching.gamesPlayed != null) {
                         player.setGamesPlayed(pitching.gamesPlayed);
                     }
+                    if (pitching.team != null) {
+                        player.setTeamId(pitching.team.id);
+                    }
                 }
             } else {
                 MlbStatsApiDtos.StatBlock hitting =
@@ -59,6 +62,9 @@ public class MlbSeasonStatsService {
                     player.setOps(hitting.ops != null ? Double.parseDouble(hitting.ops) : null);
                     if (hitting.gamesPlayed != null) {
                         player.setGamesPlayed(hitting.gamesPlayed);
+                    }
+                    if (hitting.team != null) {
+                        player.setTeamId(hitting.team.id);
                     }
                 }
             }

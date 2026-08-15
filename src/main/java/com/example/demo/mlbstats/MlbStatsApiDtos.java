@@ -20,8 +20,6 @@ public class MlbStatsApiDtos {
         public StatBlock stat;
     }
 
-    // Shared by both the "hitting" and "pitching" group responses -- unused fields
-    // for whichever group you didn't ask for are just left null.
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class StatBlock {
         public Integer gamesPlayed;
@@ -32,6 +30,14 @@ public class MlbStatsApiDtos {
         public Integer wins;
         public Integer losses;
         public Integer strikeOuts;
+        public Team team;           // which team they played for during this stat period
+    }
+
+    // MLB's numeric team ID (e.g. 119 for the Dodgers) -- used to build team logo
+    // URLs: https://www.mlbstatic.com/team-logos/{teamId}.svg
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Team {
+        public Integer id;
     }
 
     // For GET /people/{id} -- used to get a player's primary position

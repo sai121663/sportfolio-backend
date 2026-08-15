@@ -55,6 +55,7 @@ public class PlayerCardService {
         dto.id = player.getId();
         dto.name = player.getName();
         dto.team = player.getTeam();
+        dto.teamId = player.getTeamId();
         dto.sport = player.getSport();
         dto.price = player.getPrice();
         dto.imageUrl = player.getImageUrl();

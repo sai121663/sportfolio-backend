@@ -42,6 +42,11 @@ public class Player {
     // (ERA/Wins/Strikeouts).
     private String position;
 
+    // MLB's own numeric team ID (e.g. 119 for the Dodgers), pulled from the same
+    // season-stats response MlbSeasonStatsService already fetches. Used to build
+    // team logo URLs: https://www.mlbstatic.com/team-logos/{teamId}.svg
+    private Integer teamId;
+
     // Season totals, pulled from MLB's official Stats API (statsapi.mlb.com).
     private Integer homeRuns;
     private Integer rbi;
@@ -79,6 +84,9 @@ public class Player {
     public String getPosition() { return position; }
     public void setPosition(String position) { this.position = position; }
 
+    public Integer getTeamId() { return teamId; }
+    public void setTeamId(Integer teamId) { this.teamId = teamId; }
+
     public Integer getHomeRuns() { return homeRuns; }
     public void setHomeRuns(Integer homeRuns) { this.homeRuns = homeRuns; }
 
@@ -96,7 +104,7 @@ public class Player {
 
     public Integer getLosses() { return losses; }
     public void setLosses(Integer losses) { this.losses = losses; }
-    
+
     public Integer getStrikeouts() { return strikeouts; }
     public void setStrikeouts(Integer strikeouts) { this.strikeouts = strikeouts; }
 
