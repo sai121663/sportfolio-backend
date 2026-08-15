@@ -58,21 +58,19 @@ public class AdminIngestionController {
     }
 
     // TEMPORARY -- dumps every price_history row that has a raw stat line
-    // attached, as a JSON array of {position, fantasyPoints, gameDate,
-    // rawStats}. This is the data we use to solve for Tank01's real scoring
-    // formula: comparing many known (raw stats -> fantasy points) pairs.
+    // attached, one JSON object per line (not a single array), so it's easy
+    // to transfer and parse line-by-line. Each line is
+    // {position, fantasyPoints, gameDate, rawStats}. This is the data we use
+    // to solve for Tank01's real scoring formula: comparing many known
+    // (raw stats -> fantasy points) pairs.
     @GetMapping("/admin/export-raw-stats")
     public String exportRawStats() {
         List<PriceHistory> all = priceHistoryRepository.findAll();
 
-        StringBuilder json = new StringBuilder("[");
-        boolean first = true;
+        StringBuilder json = new StringBuilder();
         for (PriceHistory record : all) {
             String rawStats = record.getRawStatsJson();
             if (rawStats == null || rawStats.isEmpty() || rawStats.equals("{}")) continue;
-
-            if (!first) json.append(",");
-            first = false;
 
             String position = (record.getPlayer() != null && record.getPlayer().getPosition() != null)
                     ? record.getPlayer().getPosition() : "";
@@ -82,9 +80,8 @@ public class AdminIngestionController {
             json.append("\"fantasyPoints\":").append(record.getFantasyPoints() != null ? record.getFantasyPoints() : 0.0).append(",");
             json.append("\"gameDate\":\"").append(record.getGameDate()).append("\",");
             json.append("\"rawStats\":").append(rawStats);
-            json.append("}");
+            json.append("}\n");
         }
-        json.append("]");
         return json.toString();
     }
 }
