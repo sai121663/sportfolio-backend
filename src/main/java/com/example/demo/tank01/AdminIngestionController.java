@@ -1,11 +1,14 @@
 package com.example.demo.tank01;
 
+import com.example.demo.pricing.PriceHistory;
+import com.example.demo.pricing.PriceHistoryRepository;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 
 // TEMPORARY -- lets you manually trigger MLB ingestion for any date, e.g. to
 // backfill yesterday and test that the new price formula moves prices across
@@ -17,9 +20,11 @@ public class AdminIngestionController {
     private static final DateTimeFormatter GAME_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     private final MlbIngestionService mlbIngestionService;
+    private final PriceHistoryRepository priceHistoryRepository;
 
-    public AdminIngestionController(MlbIngestionService mlbIngestionService) {
+    public AdminIngestionController(MlbIngestionService mlbIngestionService, PriceHistoryRepository priceHistoryRepository) {
         this.mlbIngestionService = mlbIngestionService;
+        this.priceHistoryRepository = priceHistoryRepository;
     }
 
     @GetMapping("/admin/ingest-mlb")
@@ -50,5 +55,36 @@ public class AdminIngestionController {
 
         return "Backfilled " + daysProcessed + " days (" + startDate + " to " + endDate
                 + "), " + totalRecords + " total records ingested.";
+    }
+
+    // TEMPORARY -- dumps every price_history row that has a raw stat line
+    // attached, as a JSON array of {position, fantasyPoints, gameDate,
+    // rawStats}. This is the data we use to solve for Tank01's real scoring
+    // formula: comparing many known (raw stats -> fantasy points) pairs.
+    @GetMapping("/admin/export-raw-stats")
+    public String exportRawStats() {
+        List<PriceHistory> all = priceHistoryRepository.findAll();
+
+        StringBuilder json = new StringBuilder("[");
+        boolean first = true;
+        for (PriceHistory record : all) {
+            String rawStats = record.getRawStatsJson();
+            if (rawStats == null || rawStats.isEmpty() || rawStats.equals("{}")) continue;
+
+            if (!first) json.append(",");
+            first = false;
+
+            String position = (record.getPlayer() != null && record.getPlayer().getPosition() != null)
+                    ? record.getPlayer().getPosition() : "";
+
+            json.append("{");
+            json.append("\"position\":\"").append(position.replace("\"", "\\\"")).append("\",");
+            json.append("\"fantasyPoints\":").append(record.getFantasyPoints() != null ? record.getFantasyPoints() : 0.0).append(",");
+            json.append("\"gameDate\":\"").append(record.getGameDate()).append("\",");
+            json.append("\"rawStats\":").append(rawStats);
+            json.append("}");
+        }
+        json.append("]");
+        return json.toString();
     }
 }
