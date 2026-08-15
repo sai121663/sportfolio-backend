@@ -36,8 +36,6 @@ public class MlbSeasonStatsService {
 
             player.setPosition(position);
 
-
-
             if ("P".equals(position)) {
                 MlbStatsApiDtos.StatBlock pitching =
                         mlbStatsApiClient.getPitchingSeasonStats(player.getExternalId(), season);
@@ -69,16 +67,17 @@ public class MlbSeasonStatsService {
                 }
             }
 
-
-                
             playerRepository.save(player);
             updatedCount++;
         }
         return updatedCount;
     }
 
-    @Scheduled(cron = "0 0 0,1,10-23 * * *") // shortly after the Tank01 box-score ingestion
-    
+    // Fires at 6:15 a.m. US Eastern time -- ten minutes after MlbIngestionService's
+    // 6:05 a.m. run, so gamesPlayed/position/season stats are fresh before that
+    // day's price ingestion needs them. Pinned to America/New_York so this means
+    // the same real-world time regardless of what timezone the server runs in.
+    @Scheduled(cron = "0 15 6 * * *", zone = "America/New_York")
     public void scheduledMlbSeasonStatsRefresh() {
         int count = refreshAllMlbSeasonStats();
         System.out.println("MLB season stats refresh complete: " + count + " players updated");

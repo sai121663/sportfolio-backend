@@ -8,12 +8,17 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 
 @Service
 public class MlbIngestionService {
+
+    // MLB game dates are always based on US time, regardless of what timezone
+    // the server itself runs in (Railway defaults to UTC).
+    private static final ZoneId MLB_ZONE = ZoneId.of("America/New_York");
 
     private final MlbClient mlbClient;
     private final PlayerRepository playerRepository;
@@ -77,9 +82,16 @@ public class MlbIngestionService {
         return updatedCount;
     }
 
-    @Scheduled(cron = "0 5 6  * * *") // resets price at 6:05 a.m. everyday for MLB
+    // Fires at 6:05 a.m. US Eastern time every day -- well after any MLB game
+    // could still be in progress, even for late West Coast games. Explicitly
+    // pinned to America/New_York so this means the same real-world time
+    // regardless of what timezone the server itself happens to run in.
+    @Scheduled(cron = "0 5 6 * * *", zone = "America/New_York")
     public void scheduledMlbIngestion() {
-        String gameDate = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        // By 6:05 a.m. ET, the calendar has already rolled over to a new day --
+        // last night's games belong to the day that just ended, so we ingest
+        // "yesterday" (in US time), not "today".
+        String gameDate = LocalDate.now(MLB_ZONE).minusDays(1).format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         int count = ingestMlbFantasyData(gameDate);
         System.out.println("Scheduled MLB ingestion complete: " + count + " records updated for " + gameDate);
     }
