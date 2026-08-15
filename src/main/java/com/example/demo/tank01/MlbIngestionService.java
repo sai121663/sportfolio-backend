@@ -4,6 +4,7 @@ import com.example.demo.pricing.PriceHistoryRepository;
 import com.example.demo.pricing.PricingService;
 import com.example.demo.player.Player;
 import com.example.demo.player.PlayerRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -16,25 +17,26 @@ import java.util.Map;
 @Service
 public class MlbIngestionService {
 
-    // MLB game dates are always based on US time, regardless of what timezone
-    // the server itself runs in (Railway defaults to UTC).
     private static final ZoneId MLB_ZONE = ZoneId.of("America/New_York");
 
     private final MlbClient mlbClient;
     private final PlayerRepository playerRepository;
     private final PricingService pricingService;
     private final PriceHistoryRepository priceHistoryRepository;
+    private final ObjectMapper objectMapper;
 
     public MlbIngestionService(
             MlbClient mlbClient,
             PlayerRepository playerRepository,
             PricingService pricingService,
-            PriceHistoryRepository priceHistoryRepository
+            PriceHistoryRepository priceHistoryRepository,
+            ObjectMapper objectMapper
     ) {
         this.mlbClient = mlbClient;
         this.playerRepository = playerRepository;
         this.pricingService = pricingService;
         this.priceHistoryRepository = priceHistoryRepository;
+        this.objectMapper = objectMapper;
     }
 
     public int ingestMlbFantasyData(String gameDate) {
@@ -73,8 +75,16 @@ public class MlbIngestionService {
                     adpBonus = Math.max(0.0, 100.0 * (1 - adp / 300.0));
                 }
 
+                String rawStatsJson = null;
+                try {
+                    rawStatsJson = objectMapper.writeValueAsString(stat.getRawStats());
+                } catch (Exception e) {
+                    // Shouldn't really happen (it's just a Map<String, Object>),
+                    // but don't let a serialization hiccup break real ingestion.
+                }
+
                 playerRepository.save(player);
-                pricingService.updatePrice(player, gameDate, weeklyProjection, adpBonus);
+                pricingService.updatePrice(player, gameDate, weeklyProjection, adpBonus, rawStatsJson);
                 playerRepository.save(player);
                 updatedCount++;
             }
@@ -82,15 +92,8 @@ public class MlbIngestionService {
         return updatedCount;
     }
 
-    // Fires at 6:05 a.m. US Eastern time every day -- well after any MLB game
-    // could still be in progress, even for late West Coast games. Explicitly
-    // pinned to America/New_York so this means the same real-world time
-    // regardless of what timezone the server itself happens to run in.
     @Scheduled(cron = "0 5 6 * * *", zone = "America/New_York")
     public void scheduledMlbIngestion() {
-        // By 6:05 a.m. ET, the calendar has already rolled over to a new day --
-        // last night's games belong to the day that just ended, so we ingest
-        // "yesterday" (in US time), not "today".
         String gameDate = LocalDate.now(MLB_ZONE).minusDays(1).format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         int count = ingestMlbFantasyData(gameDate);
         System.out.println("Scheduled MLB ingestion complete: " + count + " records updated for " + gameDate);

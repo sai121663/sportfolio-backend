@@ -19,6 +19,14 @@ public class PriceHistory {
     private String gameDate;
     private Instant recordedAt;
 
+    // The full raw stat line Tank01 sent for this player's game (hits, walks,
+    // home runs, innings pitched, etc.), stored as a JSON string. Used later to
+    // reverse-engineer Tank01's exact fantasy scoring formula by comparing many
+    // real stat lines against their known fantasyPoints totals. TEXT instead of
+    // the default varchar(255) since a full stat line can be a decent chunk of JSON.
+    @Column(columnDefinition = "TEXT")
+    private String rawStatsJson;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
@@ -36,4 +44,7 @@ public class PriceHistory {
 
     public Instant getRecordedAt() { return recordedAt; }
     public void setRecordedAt(Instant recordedAt) { this.recordedAt = recordedAt; }
+
+    public String getRawStatsJson() { return rawStatsJson; }
+    public void setRawStatsJson(String rawStatsJson) { this.rawStatsJson = rawStatsJson; }
 }
