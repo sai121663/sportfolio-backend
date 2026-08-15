@@ -44,11 +44,22 @@ public class MlbSeasonStatsService {
                     player.setWins(pitching.wins);
                     player.setLosses(pitching.losses);
                     player.setStrikeouts(pitching.strikeOuts);
+                    player.setHits(pitching.hits);
+                    player.setWalks(pitching.baseOnBalls);
+                    player.setEarnedRuns(pitching.earnedRuns);
+                    player.setSaves(pitching.saves);
+                    player.setHolds(pitching.holds);
+                    player.setOuts(pitching.outs);
                     if (pitching.gamesPlayed != null) {
                         player.setGamesPlayed(pitching.gamesPlayed);
                     }
                     if (pitching.team != null) {
                         player.setTeamId(pitching.team.id);
+                    }
+
+                    Double trueAvg = calculateTrueSeasonAvgFantasyPoints(player);
+                    if (trueAvg != null) {
+                        player.setAvgFantasyPoints(trueAvg);
                     }
                 }
             } else {
@@ -58,11 +69,24 @@ public class MlbSeasonStatsService {
                     player.setHomeRuns(hitting.homeRuns);
                     player.setRbi(hitting.rbi);
                     player.setOps(hitting.ops != null ? Double.parseDouble(hitting.ops) : null);
+                    player.setHits(hitting.hits);
+                    player.setDoubles(hitting.doubles);
+                    player.setTriples(hitting.triples);
+                    player.setWalks(hitting.baseOnBalls);
+                    player.setHitByPitch(hitting.hitByPitch);
+                    player.setStolenBases(hitting.stolenBases);
+                    player.setRuns(hitting.runs);
+                    player.setStrikeouts(hitting.strikeOuts);
                     if (hitting.gamesPlayed != null) {
                         player.setGamesPlayed(hitting.gamesPlayed);
                     }
                     if (hitting.team != null) {
                         player.setTeamId(hitting.team.id);
+                    }
+
+                    Double trueAvg = calculateTrueSeasonAvgFantasyPoints(player);
+                    if (trueAvg != null) {
+                        player.setAvgFantasyPoints(trueAvg);
                     }
                 }
             }
@@ -71,6 +95,65 @@ public class MlbSeasonStatsService {
             updatedCount++;
         }
         return updatedCount;
+    }
+
+    // Computes a real, per-game fantasy-points average straight from this player's
+    // full-season MLB stat totals, using the exact scoring formula reverse-
+    // engineered from real Tank01 box scores (solved via regression against real
+    // paired raw-stats/fantasy-points data):
+    //
+    //   Hitters: 1B=1, 2B=2, 3B=3, HR=4, plus +1 each for R/RBI/BB/HBP/SB, -1 per K
+    //   Pitchers: +1 per out, -1 per hit allowed, -2 per earned run, -1 per walk,
+    //             +1 per strikeout, +/-2 for win/loss/save/hold
+    //
+    // This replaces the old approach of building the average incrementally, one
+    // ingested game at a time -- which left it "thin" (based on only however many
+    // games we happened to have ingested since the app existed) even for players
+    // who had already played 100+ real games this season. Recalculating this
+    // fresh from real season totals every night means the baseline is always
+    // accurate, regardless of how much or little day-to-day ingestion history we
+    // happen to have for a given player.
+    private Double calculateTrueSeasonAvgFantasyPoints(Player player) {
+        Integer gamesPlayed = player.getGamesPlayed();
+        if (gamesPlayed == null || gamesPlayed <= 0) return null;
+
+        if ("P".equals(player.getPosition())) {
+            if (player.getOuts() == null || player.getHits() == null || player.getEarnedRuns() == null
+                    || player.getWalks() == null || player.getStrikeouts() == null
+                    || player.getWins() == null || player.getLosses() == null
+                    || player.getSaves() == null || player.getHolds() == null) {
+                return null;
+            }
+            double total = player.getOuts()
+                    - player.getHits()
+                    - (2.0 * player.getEarnedRuns())
+                    - player.getWalks()
+                    + player.getStrikeouts()
+                    + (2.0 * player.getWins())
+                    - (2.0 * player.getLosses())
+                    + (2.0 * player.getSaves())
+                    + (2.0 * player.getHolds());
+            return total / gamesPlayed;
+        } else {
+            if (player.getHits() == null || player.getDoubles() == null || player.getTriples() == null
+                    || player.getHomeRuns() == null || player.getRuns() == null || player.getRbi() == null
+                    || player.getWalks() == null || player.getHitByPitch() == null
+                    || player.getStolenBases() == null || player.getStrikeouts() == null) {
+                return null;
+            }
+            int singles = player.getHits() - player.getDoubles() - player.getTriples() - player.getHomeRuns();
+            double total = singles
+                    + (2.0 * player.getDoubles())
+                    + (3.0 * player.getTriples())
+                    + (4.0 * player.getHomeRuns())
+                    + player.getRuns()
+                    + player.getRbi()
+                    + player.getWalks()
+                    + player.getHitByPitch()
+                    + player.getStolenBases()
+                    - player.getStrikeouts();
+            return total / gamesPlayed;
+        }
     }
 
     // Fires at 6:15 a.m. US Eastern time -- ten minutes after MlbIngestionService's

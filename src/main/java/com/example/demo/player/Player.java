@@ -56,6 +56,23 @@ public class Player {
     private Integer losses;
     private Integer strikeouts;
 
+    // Additional season totals -- used to compute a real, formula-based season
+    // average fantasy-points-per-game (see MlbSeasonStatsService), using the exact
+    // scoring weights reverse-engineered from Tank01's real box scores. Field
+    // meaning depends on position, same pattern as the fields above: for hitters
+    // these are stats recorded, for pitchers "hits"/"walks" are stats allowed.
+    private Integer hits;
+    private Integer doubles;
+    private Integer triples;
+    private Integer walks;
+    private Integer hitByPitch;
+    private Integer stolenBases;
+    private Integer runs;
+    private Integer earnedRuns; // pitching only
+    private Integer saves;      // pitching only
+    private Integer holds;      // pitching only
+    private Integer outs;       // pitching only -- total outs recorded this season
+
     // Getters and setters
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -107,6 +124,39 @@ public class Player {
 
     public Integer getStrikeouts() { return strikeouts; }
     public void setStrikeouts(Integer strikeouts) { this.strikeouts = strikeouts; }
+
+    public Integer getHits() { return hits; }
+    public void setHits(Integer hits) { this.hits = hits; }
+
+    public Integer getDoubles() { return doubles; }
+    public void setDoubles(Integer doubles) { this.doubles = doubles; }
+
+    public Integer getTriples() { return triples; }
+    public void setTriples(Integer triples) { this.triples = triples; }
+
+    public Integer getWalks() { return walks; }
+    public void setWalks(Integer walks) { this.walks = walks; }
+
+    public Integer getHitByPitch() { return hitByPitch; }
+    public void setHitByPitch(Integer hitByPitch) { this.hitByPitch = hitByPitch; }
+
+    public Integer getStolenBases() { return stolenBases; }
+    public void setStolenBases(Integer stolenBases) { this.stolenBases = stolenBases; }
+
+    public Integer getRuns() { return runs; }
+    public void setRuns(Integer runs) { this.runs = runs; }
+
+    public Integer getEarnedRuns() { return earnedRuns; }
+    public void setEarnedRuns(Integer earnedRuns) { this.earnedRuns = earnedRuns; }
+
+    public Integer getSaves() { return saves; }
+    public void setSaves(Integer saves) { this.saves = saves; }
+
+    public Integer getHolds() { return holds; }
+    public void setHolds(Integer holds) { this.holds = holds; }
+
+    public Integer getOuts() { return outs; }
+    public void setOuts(Integer outs) { this.outs = outs; }
 
     public String getImageUrl() {
         if ("MLB".equals(sport) && externalId != null) {
