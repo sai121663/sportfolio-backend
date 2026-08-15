@@ -65,7 +65,7 @@ public class PlayerIngestionService {
                         ? Double.parseDouble(projection.fantasyPoints) : null;
 
                 playerRepository.save(player);
-                pricingService.updatePrice(player, gameDate, weeklyProjection, null);
+                pricingService.updatePrice(player, gameDate, weeklyProjection, null, null);
                 playerRepository.save(player);
 
                 updatedCount++;
