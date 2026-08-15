@@ -56,7 +56,18 @@ public class MlbStatsApiClient {
             if (firstGroup.splits == null || firstGroup.splits.isEmpty()) {
                 return null;
             }
-            return firstGroup.splits.get(0).stat;
+
+            MlbStatsApiDtos.Split split = firstGroup.splits.get(0);
+            MlbStatsApiDtos.StatBlock stat = split.stat;
+
+            // "team" lives alongside "stat" in the real response, not nested inside
+            // it -- copy it over onto the StatBlock so callers can keep reading
+            // stat.team like before, without needing to know about Split at all.
+            if (stat != null) {
+                stat.team = split.team;
+            }
+
+            return stat;
         } catch (Exception e) {
             // Player might not have played this season yet, or the ID doesn't
             // resolve -- just skip these stats for this player rather than failing

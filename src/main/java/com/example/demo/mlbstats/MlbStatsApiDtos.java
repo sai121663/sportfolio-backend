@@ -18,6 +18,7 @@ public class MlbStatsApiDtos {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Split {
         public StatBlock stat;
+        public Team team; // sits alongside "stat" in the real response, not inside it
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
