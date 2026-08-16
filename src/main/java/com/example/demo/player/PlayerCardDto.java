@@ -15,7 +15,7 @@ public class PlayerCardDto {
     public Double priceChange;
     public Double priceChangePercent;
     public Double marketCap;
-    public Integer volume;
+    public Double volume;
     public Double seasonHigh;
     public Double seasonLow;
     public List<Double> priceHistory;

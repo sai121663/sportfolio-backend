@@ -121,13 +121,13 @@ public class PlayerCardService {
             dto.priceChangePercent = 0.0;
         }
 
-        int totalShares = holdings.stream()
-                .mapToInt(h -> h.getQuantity() != null ? h.getQuantity() : 0)
+        double totalShares = holdings.stream()
+                .mapToDouble(h -> h.getQuantity() != null ? h.getQuantity() : 0.0)
                 .sum();
         dto.marketCap = totalShares * player.getPrice();
 
         dto.volume = trades.stream()
-                .mapToInt(t -> t.getQuantity() != null ? t.getQuantity() : 0)
+                .mapToDouble(t -> t.getQuantity() != null ? t.getQuantity() : 0.0)
                 .sum();
 
         return dto;
