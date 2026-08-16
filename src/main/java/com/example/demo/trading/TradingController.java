@@ -13,12 +13,12 @@ public class TradingController {
     }
 
     @PostMapping("/buy")
-    public Trade buy(@RequestParam Long userId, @RequestParam Long playerId, @RequestParam int quantity) {
+    public Trade buy(@RequestParam Long userId, @RequestParam Long playerId, @RequestParam double quantity) {
         return tradingService.buy(userId, playerId, quantity);
     }
 
     @PostMapping("/sell")
-    public Trade sell(@RequestParam Long userId, @RequestParam Long playerId, @RequestParam int quantity) {
+    public Trade sell(@RequestParam Long userId, @RequestParam Long playerId, @RequestParam double quantity) {
         return tradingService.sell(userId, playerId, quantity);
     }
 }

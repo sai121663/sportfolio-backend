@@ -1,3 +1,4 @@
+// src/main/java/com/example/demo/trading/HoldingView.java
 package com.example.demo.trading;
 
 public class HoldingView {
@@ -7,7 +8,7 @@ public class HoldingView {
     private String team;
     private String sport;
     private String imageUrl;
-    private Integer quantity;
+    private Double quantity;
     private Double boughtAt;       // avg cost basis per share
     private Double currentPrice;
     private Double positionValue;
@@ -27,8 +28,8 @@ public class HoldingView {
     public String getImageUrl() { return imageUrl; }
     public void setImageUrl(String imageUrl) { this.imageUrl = imageUrl; }
 
-    public Integer getQuantity() { return quantity; }
-    public void setQuantity(Integer quantity) { this.quantity = quantity; }
+    public Double getQuantity() { return quantity; }
+    public void setQuantity(Double quantity) { this.quantity = quantity; }
 
     public Double getBoughtAt() { return boughtAt; }
     public void setBoughtAt(Double boughtAt) { this.boughtAt = boughtAt; }

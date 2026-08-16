@@ -1,3 +1,4 @@
+// src/main/java/com/example/demo/trading/TradingService.java
 package com.example.demo.trading;
 
 import com.example.demo.player.Player;
@@ -22,7 +23,7 @@ public class TradingService {
         this.tradeRepository = tradeRepository;
     }
 
-    public Trade buy(Long userId, Long playerId, int quantity) {
+    public Trade buy(Long userId, Long playerId, double quantity) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
         Player player = playerRepository.findById(playerId)
@@ -41,17 +42,17 @@ public class TradingService {
                     Holding h = new Holding();
                     h.setUser(user);
                     h.setPlayer(player);
-                    h.setQuantity(0);
+                    h.setQuantity(0.0);
                     h.setAvgCostBasis(0.0);
                     return h;
                 });
 
         // Weighted-average cost basis: fold the new lot's price into the running average.
-        int existingQty = holding.getQuantity();
+        double existingQty = holding.getQuantity() != null ? holding.getQuantity() : 0.0;
         double existingCostBasis = existingQty > 0 && holding.getAvgCostBasis() != null
                 ? holding.getAvgCostBasis()
                 : 0.0;
-        int newQty = existingQty + quantity;
+        double newQty = existingQty + quantity;
         double newAvgCostBasis = ((existingCostBasis * existingQty) + (player.getPrice() * quantity)) / newQty;
 
         holding.setQuantity(newQty);
@@ -68,7 +69,7 @@ public class TradingService {
         return tradeRepository.save(trade);
     }
 
-    public Trade sell(Long userId, Long playerId, int quantity) {
+    public Trade sell(Long userId, Long playerId, double quantity) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
         Player player = playerRepository.findById(playerId)
@@ -86,10 +87,14 @@ public class TradingService {
         userRepository.save(user);
 
         // Average cost basis per share is unchanged by a sell -- only the quantity shrinks.
-        holding.setQuantity(holding.getQuantity() - quantity);
-        if (holding.getQuantity() == 0) {
+        // A small epsilon treats a "sell everything" order as fully closing the
+        // holding even if floating-point math leaves a tiny fractional dust
+        // amount (e.g. 0.000000003) instead of an exact zero.
+        double remaining = holding.getQuantity() - quantity;
+        if (remaining <= 1e-9) {
             holdingRepository.delete(holding);
         } else {
+            holding.setQuantity(remaining);
             holdingRepository.save(holding);
         }
 

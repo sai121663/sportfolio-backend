@@ -1,3 +1,4 @@
+// src/main/java/com/example/demo/trading/Holding.java
 package com.example.demo.trading;
 
 import com.example.demo.player.Player;
@@ -16,7 +17,7 @@ public class Holding {
     @ManyToOne
     private Player player;
 
-    private Integer quantity;
+    private Double quantity;
 
     // Weighted-average price per share paid across all open BUYs for this holding.
     // Unchanged by SELLs (average-cost-basis method); reset when the holding is
@@ -32,8 +33,8 @@ public class Holding {
     public Player getPlayer() { return player; }
     public void setPlayer(Player player) { this.player = player; }
 
-    public Integer getQuantity() { return quantity; }
-    public void setQuantity(Integer quantity) { this.quantity = quantity; }
+    public Double getQuantity() { return quantity; }
+    public void setQuantity(Double quantity) { this.quantity = quantity; }
 
     public Double getAvgCostBasis() { return avgCostBasis; }
     public void setAvgCostBasis(Double avgCostBasis) { this.avgCostBasis = avgCostBasis; }

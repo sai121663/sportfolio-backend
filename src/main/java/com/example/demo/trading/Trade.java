@@ -18,7 +18,7 @@ public class Trade {
     private Player player;
 
     private String type; // "BUY" or "SELL"
-    private Integer quantity;
+    private Double quantity;
     private Double pricePerUnit;
     private Instant timestamp;
 
@@ -34,8 +34,8 @@ public class Trade {
     public String getType() { return type; }
     public void setType(String type) { this.type = type; }
 
-    public Integer getQuantity() { return quantity; }
-    public void setQuantity(Integer quantity) { this.quantity = quantity; }
+    public Double getQuantity() { return quantity; }
+    public void setQuantity(Double quantity) { this.quantity = quantity; }
 
     public Double getPricePerUnit() { return pricePerUnit; }
     public void setPricePerUnit(Double pricePerUnit) { this.pricePerUnit = pricePerUnit; }
