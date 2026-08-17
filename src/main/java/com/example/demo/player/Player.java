@@ -1,3 +1,4 @@
+// Player.java
 package com.example.demo.player;
 
 import jakarta.persistence.*;
@@ -36,6 +37,13 @@ public class Player {
     private Double fantasyPoints;
     private Double price;
     private Double avgFantasyPoints;
+
+    // Tank01's weekly fantasy-point projection and ADP-based market bonus for
+    // this player, persisted here (not just cached in-memory) so pricing can
+    // be recomputed later without re-calling the Tank01 API. Updated whenever
+    // a real ingestion run fetches fresh data; untouched by /admin/reset-pricing.
+    private Double weeklyProjection;
+    private Double adpBonus;
 
     // Position from Tank01's box score (e.g. "P", "1B", "OF", "DH"). Used to decide
     // whether a player's card shows hitting stats (OPS/HR/RBI) or pitching stats
@@ -97,6 +105,12 @@ public class Player {
 
     public Double getAvgFantasyPoints() { return avgFantasyPoints; }
     public void setAvgFantasyPoints(Double avgFantasyPoints) { this.avgFantasyPoints = avgFantasyPoints; }
+
+    public Double getWeeklyProjection() { return weeklyProjection; }
+    public void setWeeklyProjection(Double weeklyProjection) { this.weeklyProjection = weeklyProjection; }
+
+    public Double getAdpBonus() { return adpBonus; }
+    public void setAdpBonus(Double adpBonus) { this.adpBonus = adpBonus; }
 
     public String getPosition() { return position; }
     public void setPosition(String position) { this.position = position; }

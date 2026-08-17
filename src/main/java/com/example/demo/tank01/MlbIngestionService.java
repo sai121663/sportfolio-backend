@@ -1,3 +1,4 @@
+// MlbIngestionService.java
 package com.example.demo.tank01;
 
 import com.example.demo.pricing.PriceHistoryRepository;
@@ -7,6 +8,7 @@ import com.example.demo.player.PlayerRepository;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -19,22 +21,26 @@ public class MlbIngestionService {
     // MLB game dates are always based on US time, regardless of what timezone
     // the server itself runs in (Railway defaults to UTC).
     private static final ZoneId MLB_ZONE = ZoneId.of("America/New_York");
+    private static final DateTimeFormatter GAME_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     private final MlbClient mlbClient;
     private final PlayerRepository playerRepository;
     private final PricingService pricingService;
     private final PriceHistoryRepository priceHistoryRepository;
+    private final RawGameStatRepository rawGameStatRepository;
 
     public MlbIngestionService(
             MlbClient mlbClient,
             PlayerRepository playerRepository,
             PricingService pricingService,
-            PriceHistoryRepository priceHistoryRepository
+            PriceHistoryRepository priceHistoryRepository,
+            RawGameStatRepository rawGameStatRepository
     ) {
         this.mlbClient = mlbClient;
         this.playerRepository = playerRepository;
         this.pricingService = pricingService;
         this.priceHistoryRepository = priceHistoryRepository;
+        this.rawGameStatRepository = rawGameStatRepository;
     }
 
     // Hand-rolled, dependency-free JSON encoding for a simple flat map of
@@ -68,6 +74,10 @@ public class MlbIngestionService {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
+    // Hits the real Tank01 API. Fetches a day's games, box scores,
+    // projections, and ADP, prices every player who appeared, AND archives
+    // the raw stats to RawGameStat so this same day can be re-priced later
+    // (via recomputePricesFromCache) without ever calling Tank01 again.
     public int ingestMlbFantasyData(String gameDate) {
         List<String> gameIds = mlbClient.getGameIdsForDate(gameDate);
         Map<String, String> nameMap = mlbClient.getPlayerNameMap();
@@ -104,14 +114,73 @@ public class MlbIngestionService {
                     adpBonus = Math.max(0.0, 100.0 * (1 - adp / 300.0));
                 }
 
+                // Persist these onto the player itself (not just the in-memory
+                // cache in MlbClient) so recomputePricesFromCache can reuse them
+                // later without needing to call Tank01 again.
+                player.setWeeklyProjection(weeklyProjection);
+                player.setAdpBonus(adpBonus);
+
                 String rawStatsJson = toJson(stat.getRawStats());
 
                 playerRepository.save(player);
+
+                archiveRawGameStat(player, gameDate, player.getFantasyPoints(), rawStatsJson);
+
                 pricingService.updatePrice(player, gameDate, weeklyProjection, adpBonus, rawStatsJson);
                 playerRepository.save(player);
                 updatedCount++;
             }
         }
+        return updatedCount;
+    }
+
+    private void archiveRawGameStat(Player player, String gameDate, Double fantasyPoints, String rawStatsJson) {
+        if (rawGameStatRepository.existsByPlayerAndGameDate(player, gameDate)) {
+            return;
+        }
+        RawGameStat archive = new RawGameStat();
+        archive.setPlayer(player);
+        archive.setGameDate(gameDate);
+        archive.setFantasyPoints(fantasyPoints);
+        archive.setRawStatsJson(rawStatsJson);
+        archive.setFetchedAt(Instant.now());
+        rawGameStatRepository.save(archive);
+    }
+
+    // Re-runs PricingService over already-archived RawGameStat rows for a date
+    // range -- zero calls to Tank01, zero quota spent. Meant to be run right
+    // after /admin/reset-pricing whenever you tweak the pricing formula and
+    // want to see the result across real historical data again, without
+    // re-fetching anything. Only works for dates that were already ingested
+    // for real at least once via ingestMlbFantasyData/ingestRange.
+    public int recomputePricesFromCache(String startDate, String endDate) {
+        LocalDate start = LocalDate.parse(startDate, GAME_DATE_FORMAT);
+        LocalDate end = LocalDate.parse(endDate, GAME_DATE_FORMAT);
+        int updatedCount = 0;
+
+        for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
+            String gameDate = date.format(GAME_DATE_FORMAT);
+            List<RawGameStat> cachedStats = rawGameStatRepository.findByGameDateOrderByPlayerAsc(gameDate);
+
+            for (RawGameStat cached : cachedStats) {
+                Player player = cached.getPlayer();
+                if (player == null) continue;
+
+                player.setFantasyPoints(cached.getFantasyPoints());
+
+                pricingService.updatePrice(
+                        player,
+                        gameDate,
+                        player.getWeeklyProjection(),
+                        player.getAdpBonus(),
+                        cached.getRawStatsJson()
+                );
+
+                playerRepository.save(player);
+                updatedCount++;
+            }
+        }
+
         return updatedCount;
     }
 
