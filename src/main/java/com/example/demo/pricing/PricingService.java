@@ -4,57 +4,69 @@ import com.example.demo.player.Player;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
 
 @Component
 public class PricingService {
 
-    private static final double MAX_DAILY_CHANGE_PERCENT = 0.30;
-    private static final double MIN_DAILY_CHANGE_PERCENT = 0.08;
+    private static final DateTimeFormatter GAME_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
+
     private static final double MIN_PRICE = 1.0;
 
-    // Roughly how many games a full season is, used to calibrate how fast the
-    // daily swing ceiling shrinks. A player's 2nd game moves the price close to
-    // MAX_DAILY_CHANGE_PERCENT; by the time they've played this many games the
-    // ceiling has shrunk to MIN_DAILY_CHANGE_PERCENT -- and it keeps shrinking
-    // past that if they somehow play more (there's no hard floor).
+    // How many real games a full season roughly is -- used to calibrate how
+    // fast the "move toward target" ceiling shrinks as a player racks up a
+    // track record. Early in a player's season, a single update can move the
+    // price a lot; by ~162 games in, moves are much smaller and steadier.
     private static final int REFERENCE_SEASON_GAMES = 162;
+    private static final double MAX_DAILY_MOVE_PERCENT = 0.30;
+    private static final double MIN_DAILY_MOVE_PERCENT = 0.08;
 
-    // Roughly the MLB-wide average this season -- used as the "expected"
-    // baseline a player's real stats get compared against when building their
-    // starting price. Hitters above this OPS get a boost, below get a cut.
-    private static final double LEAGUE_AVG_OPS = 0.715;
+    // How many calendar days count as "recent" for the recent-form factor.
+    private static final int RECENT_WINDOW_DAYS = 15;
 
-    // Same idea for pitchers, but inverted -- a LOWER era than this is good.
-    private static final double LEAGUE_AVG_ERA = 4.00;
+    // Real per-game-appearance fantasy point averages, measured directly from
+    // actual Tank01 box scores (hitters: ~104 real games, pitchers: ~47 real
+    // games -- the same sample used to calibrate the old swing-ceiling
+    // constants). This is the "average player" baseline every ratio below is
+    // measured against, so an exactly-average player prices at $100.
+    private static final double LEAGUE_AVG_HITTER_FANTASY_POINTS = 1.78;
+    private static final double LEAGUE_AVG_PITCHER_FANTASY_POINTS = 3.77;
 
-    // How far the real-season-performance adjustment is allowed to swing the
-    // skill portion of the starting price, once fully trusted. 0.5 = as low as
-    // half, 1.5 = as high as 150%.
-    private static final double MIN_PERFORMANCE_MULTIPLIER = 0.5;
-    private static final double MAX_PERFORMANCE_MULTIPLIER = 1.5;
+    // Rough MLB games-per-week, used to convert Tank01's weekly projection
+    // number down to a per-game figure so it's on the same scale as the
+    // fantasy-point averages above.
+    private static final double GAMES_PER_WEEK = 6.0;
 
-    // How many real games played before the real-season-performance adjustment
-    // is fully trusted. Below this, it's blended toward "neutral" (no
-    // adjustment) so a hot or cold streak in a handful of games doesn't
-    // overreact -- same philosophy as the daily swing ceiling, just for a
-    // different part of the formula.
+    // Roughly the midpoint of the ADP bonus's 0-100 range across a typical
+    // ~300-player draft pool -- the "average" baseline for the market-value
+    // ratio below.
+    private static final double LEAGUE_AVG_ADP_BONUS = 50.0;
+
+    // ---- The weighted pricing model ----
+    // Each factor is expressed as a ratio to an "average player" baseline
+    // (1.0 = exactly average). The four ratios are blended by weights into
+    // one composite ratio, which maps straight to price: a player who's
+    // exactly average on all four scores a 1.0 composite ratio -> $100.
+    //
+    // These are the FULL-CONFIDENCE weights -- what a player with an
+    // established track record this season actually uses. Players with
+    // fewer real games played this season use a dynamically-adjusted set
+    // (see calculateEffectiveWeights) that leans more on projections/ADP
+    // instead, since recent/season performance isn't a trustworthy signal
+    // yet for someone who's barely played.
+    private static final double BASE_RECENT_PERFORMANCE_WEIGHT = 0.40;
+    private static final double BASE_SEASON_PERFORMANCE_WEIGHT = 0.30;
+    private static final double BASE_PROJECTION_WEIGHT = 0.20;
+    private static final double BASE_ADP_WEIGHT = 0.10;
+
+    // How many real games played this season before the recent/season
+    // performance weights are fully trusted. Below this, weight is shifted
+    // from recent/season over to projections/ADP -- same "don't overreact to
+    // a tiny sample" philosophy the old formula used for its performance
+    // multiplier, just applied to weight distribution instead.
     private static final int GAMES_FOR_FULL_STAT_CONFIDENCE = 30;
-
-    // How many RAW fantasy points above/below a player's baseline counts as a
-    // "maximum" day (i.e. hits the full daily swing ceiling). Set to roughly
-    // 2 standard deviations of REAL single-game fantasy point outcomes,
-    // measured from actual Tank01 box scores (hitters: ~104 real games,
-    // stdev 2.91; pitchers: ~47 real games, stdev 6.32). Using a fixed,
-    // real-data-derived point scale here (instead of dividing by the
-    // player's own average) is what fixes the bug where a player having a
-    // genuinely bad season -- with a season average near or below zero --
-    // had their price only ever go up, since almost any single game would
-    // look like an "improvement" over an already-extreme negative baseline.
-    // A fixed scale doesn't care how extreme the baseline is; it just asks
-    // "how many real points better or worse than expected was today,"
-    // which stays meaningful no matter how good or bad the player has been.
-    private static final double HITTER_POINTS_FOR_FULL_SWING = 5.8;
-    private static final double PITCHER_POINTS_FOR_FULL_SWING = 12.6;
 
     private final PriceHistoryRepository priceHistoryRepository;
 
@@ -69,107 +81,128 @@ public class PricingService {
 
         if (isNewSeason) {
             player.setCurrentSeason(season);
-            // NOTE: gamesPlayed is NOT reset here on purpose. That field is owned
-            // entirely by MlbSeasonStatsService, which copies the real season
-            // total straight from MLB. This code only resets things it actually
-            // owns: the running fantasy-point average and the price.
+            // gamesPlayed is NOT reset here -- that field is owned entirely by
+            // MlbSeasonStatsService, synced straight from MLB's own API. This
+            // only resets the running fantasy-point average (which IS owned
+            // here), so last season's number doesn't bleed into this season's
+            // "season-long performance" factor.
             player.setAvgFantasyPoints(null);
-
-            double skillPortion = 0.0;
-            if (weeklyProjection != null) {
-                skillPortion += weeklyProjection;
-            }
-            if (adpBonus != null) {
-                skillPortion += adpBonus;
-            }
-
-            double performanceMultiplier = calculatePerformanceMultiplier(player);
-            double startingPrice = 100.0 + (skillPortion * performanceMultiplier);
-            player.setPrice(startingPrice);
         }
 
-        if (player.getFantasyPoints() != null) {
-            if (player.getAvgFantasyPoints() != null) {
-                // Normal case: compare today's performance to their actual
-                // running average from real games played.
-                adjustPriceForTodaysPerformance(player, player.getAvgFantasyPoints());
-            } else if (weeklyProjection != null) {
-                // No real average yet -- this is their first tracked game. Instead
-                // of leaving the price untouched, compare today against the same
-                // preseason projection that was used to set the starting price.
-                adjustPriceForTodaysPerformance(player, weeklyProjection);
-            }
+        boolean isPitcher = "P".equals(player.getPosition());
+        double leagueAvgPoints = isPitcher ? LEAGUE_AVG_PITCHER_FANTASY_POINTS : LEAGUE_AVG_HITTER_FANTASY_POINTS;
+
+        // 1. Recent fantasy performance (40%) -- average points over the last
+        // RECENT_WINDOW_DAYS days, vs. the league-average player.
+        double recentRatio = calculateRecentRatio(player, gameDate, leagueAvgPoints);
+
+        // 2. Season-long performance (30%) -- the running season average, vs.
+        // the league-average player. No games yet this season -> neutral (1.0).
+        double seasonRatio = player.getAvgFantasyPoints() != null
+                ? player.getAvgFantasyPoints() / leagueAvgPoints
+                : 1.0;
+
+        // 3. Updated projections (20%) -- Tank01's rest-of-season projection,
+        // converted from a weekly figure to a per-game one. No projection data
+        // -> neutral (1.0) rather than punishing/rewarding an unprojected player.
+        double projectionRatio = weeklyProjection != null
+                ? (weeklyProjection / GAMES_PER_WEEK) / leagueAvgPoints
+                : 1.0;
+
+        // 4. Market/ADP value (10%) -- how early this player was drafted.
+        // No ADP data at all (undrafted/deep bench) -> 0, i.e. well below average,
+        // rather than a neutral 1.0 -- an unranked player shouldn't get credit
+        // for market value it doesn't have.
+        double adpRatio = adpBonus != null ? adpBonus / LEAGUE_AVG_ADP_BONUS : 0.0;
+
+        double[] weights = calculateEffectiveWeights(player);
+        double compositeRatio =
+                weights[0] * recentRatio +
+                weights[1] * seasonRatio +
+                weights[2] * projectionRatio +
+                weights[3] * adpRatio;
+
+        double targetPrice = Math.max(MIN_PRICE, 100.0 * compositeRatio);
+
+        if (player.getPrice() == null) {
+            // No price at all yet (brand new player) -- jump straight to the
+            // target instead of "smoothing" from a price that doesn't exist.
+            player.setPrice(targetPrice);
+        } else {
+            // Smooth toward the target instead of snapping straight to it, so
+            // one big game (or a stat correction) can't cause a wild one-day
+            // jump. The cap shrinks the more games a player has played, same
+            // philosophy as the old swing ceiling.
+            int gamesPlayed = player.getGamesPlayed() != null ? player.getGamesPlayed() : 0;
+            double moveCeiling = swingCeiling(gamesPlayed + 1);
+            double gap = targetPrice - player.getPrice();
+            double maxMove = player.getPrice() * moveCeiling;
+            double actualMove = Math.max(-maxMove, Math.min(maxMove, gap));
+            player.setPrice(Math.max(MIN_PRICE, player.getPrice() + actualMove));
         }
 
         rollTodaysPerformanceIntoAverage(player);
         savePriceHistory(player, gameDate, rawStatsJson);
     }
 
-    // Compares a player's real season stats (from MLB's own API, synced
-    // separately by MlbSeasonStatsService) against a league-average baseline,
-    // to decide whether their starting price should get a boost or a cut on
-    // top of the preseason projection/ADP numbers. Returns 1.0 (no change) if
-    // we don't have real stats yet, or if the player hasn't played enough real
-    // games this season to trust the stat.
-    private double calculatePerformanceMultiplier(Player player) {
-        boolean isPitcher = "P".equals(player.getPosition());
-
-        Double rawRatio = null;
-        if (isPitcher && player.getEra() != null && player.getEra() > 0) {
-            // Lower ERA is better, so this is inverted -- a below-average era
-            // gives a ratio above 1.0.
-            rawRatio = LEAGUE_AVG_ERA / player.getEra();
-        } else if (!isPitcher && player.getOps() != null) {
-            rawRatio = player.getOps() / LEAGUE_AVG_OPS;
-        }
-
-        if (rawRatio == null) {
-            // No real season stats synced yet for this player -- don't adjust.
-            return 1.0;
-        }
-
-        double clampedRatio = Math.max(MIN_PERFORMANCE_MULTIPLIER, Math.min(MAX_PERFORMANCE_MULTIPLIER, rawRatio));
-
+    // Scales the recent/season weights down for players without an
+    // established track record this season, and hands that freed-up weight
+    // to projections/ADP instead -- split between the two proportionally to
+    // their normal 2:1 ratio (projections matter roughly twice as much as
+    // ADP once they're carrying extra weight, same as they do normally).
+    //
+    // A brand new player with 0 real games this season: recent/season
+    // contribute nothing, weight goes ~67% projections / ~33% ADP. A player
+    // with a full established season: weights are exactly the BASE_* values
+    // (40/30/20/10). Everything in between is a smooth blend.
+    private double[] calculateEffectiveWeights(Player player) {
         int gamesPlayed = player.getGamesPlayed() != null ? player.getGamesPlayed() : 0;
         double confidence = Math.min(1.0, gamesPlayed / (double) GAMES_FOR_FULL_STAT_CONFIDENCE);
 
-        // Blend between "neutral" (1.0, no adjustment) and the full clamped
-        // ratio, based on how many real games we're trusting this stat from.
-        return 1.0 + confidence * (clampedRatio - 1.0);
+        double recentWeight = BASE_RECENT_PERFORMANCE_WEIGHT * confidence;
+        double seasonWeight = BASE_SEASON_PERFORMANCE_WEIGHT * confidence;
+
+        double freedUpWeight = (BASE_RECENT_PERFORMANCE_WEIGHT + BASE_SEASON_PERFORMANCE_WEIGHT) * (1 - confidence);
+        double projectionShare = BASE_PROJECTION_WEIGHT / (BASE_PROJECTION_WEIGHT + BASE_ADP_WEIGHT);
+        double adpShare = BASE_ADP_WEIGHT / (BASE_PROJECTION_WEIGHT + BASE_ADP_WEIGHT);
+
+        double projectionWeight = BASE_PROJECTION_WEIGHT + freedUpWeight * projectionShare;
+        double adpWeight = BASE_ADP_WEIGHT + freedUpWeight * adpShare;
+
+        return new double[]{recentWeight, seasonWeight, projectionWeight, adpWeight};
     }
 
-    private void adjustPriceForTodaysPerformance(Player player, double comparisonBaseline) {
-        double todayPoints = player.getFantasyPoints();
-        int gamesPlayedBeforeToday = player.getGamesPlayed() != null ? player.getGamesPlayed() : 0;
+    // Average fantasy points over this player's games in the RECENT_WINDOW_DAYS
+    // leading up to (and including) gameDate, as a ratio to the league-average
+    // per-game figure for their position. Falls back to a neutral 1.0 ratio if
+    // they have no games in that window yet.
+    private double calculateRecentRatio(Player player, String gameDate, double leagueAvgPoints) {
+        LocalDate latestDate = LocalDate.parse(gameDate, GAME_DATE_FORMAT);
+        String windowStart = latestDate.minusDays(RECENT_WINDOW_DAYS).format(GAME_DATE_FORMAT);
 
-        // How many raw fantasy points better (or worse) than expected was
-        // today? Compared against a FIXED, real-data-derived point scale --
-        // not the player's own baseline -- so the math stays stable no
-        // matter how extreme (even negative) that baseline gets. Dividing by
-        // the player's own average used to make a deeply negative baseline
-        // (a genuinely bad season) make almost every game look like a huge
-        // improvement -- this fixes that.
-        double rawDifference = todayPoints - comparisonBaseline;
-        double pointsForFullSwing = "P".equals(player.getPosition())
-                ? PITCHER_POINTS_FOR_FULL_SWING
-                : HITTER_POINTS_FOR_FULL_SWING;
+        List<PriceHistory> recentGames = priceHistoryRepository
+                .findByPlayerAndGameDateBetween(player, windowStart, gameDate);
 
-        double ceiling = swingCeiling(gamesPlayedBeforeToday + 1);
-        double performanceDelta = (rawDifference / pointsForFullSwing) * ceiling;
-        double changePercent = Math.max(-ceiling, Math.min(ceiling, performanceDelta));
+        if (recentGames.isEmpty()) {
+            return 1.0;
+        }
 
-        double newPrice = player.getPrice() * (1 + changePercent);
-        player.setPrice(Math.max(MIN_PRICE, newPrice));
+        double avg = recentGames.stream()
+                .mapToDouble(h -> h.getFantasyPoints() != null ? h.getFantasyPoints() : 0.0)
+                .average()
+                .orElse(leagueAvgPoints);
+
+        return avg / leagueAvgPoints;
     }
 
-    // The percentage a single game is allowed to move the price, as a function
-    // of which game number this is in the player's season. Decays smoothly from
-    // MAX_DAILY_CHANGE_PERCENT toward MIN_DAILY_CHANGE_PERCENT and keeps
-    // decaying past that -- no hard floor.
+    // The max % a single update is allowed to move the price toward its
+    // target, as a function of which game number this is in the player's
+    // season. Decays smoothly from MAX_DAILY_MOVE_PERCENT toward
+    // MIN_DAILY_MOVE_PERCENT and keeps decaying past that -- no hard floor.
     private double swingCeiling(int gameNumber) {
         double g = Math.max(1, gameNumber);
         double progress = (g - 1) / (double) (REFERENCE_SEASON_GAMES - 1);
-        return MAX_DAILY_CHANGE_PERCENT * Math.pow(MIN_DAILY_CHANGE_PERCENT / MAX_DAILY_CHANGE_PERCENT, progress);
+        return MAX_DAILY_MOVE_PERCENT * Math.pow(MIN_DAILY_MOVE_PERCENT / MAX_DAILY_MOVE_PERCENT, progress);
     }
 
     private void rollTodaysPerformanceIntoAverage(Player player) {
