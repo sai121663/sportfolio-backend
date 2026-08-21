@@ -1,4 +1,3 @@
-// Player.java
 package com.example.demo.player;
 
 import jakarta.persistence.*;

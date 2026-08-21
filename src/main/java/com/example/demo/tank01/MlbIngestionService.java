@@ -1,10 +1,10 @@
-// MlbIngestionService.java
 package com.example.demo.tank01;
 
 import com.example.demo.pricing.PriceHistoryRepository;
 import com.example.demo.pricing.PricingService;
 import com.example.demo.player.Player;
 import com.example.demo.player.PlayerRepository;
+import jakarta.persistence.EntityManager;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -23,24 +23,37 @@ public class MlbIngestionService {
     private static final ZoneId MLB_ZONE = ZoneId.of("America/New_York");
     private static final DateTimeFormatter GAME_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
+    // How many players to process before flushing and clearing the Hibernate
+    // session. Spring Boot keeps one database session open for the entire
+    // length of a request by default (open-session-in-view), so a long
+    // multi-day backfill would otherwise hold on to every single entity it
+    // ever touched -- players, price history, raw stat archives -- for the
+    // whole request, growing memory until the process gets OOM-killed. This
+    // periodically hands that memory back without changing anything about
+    // the actual pricing/ingestion logic.
+    private static final int FLUSH_EVERY_N_RECORDS = 25;
+
     private final MlbClient mlbClient;
     private final PlayerRepository playerRepository;
     private final PricingService pricingService;
     private final PriceHistoryRepository priceHistoryRepository;
     private final RawGameStatRepository rawGameStatRepository;
+    private final EntityManager entityManager;
 
     public MlbIngestionService(
             MlbClient mlbClient,
             PlayerRepository playerRepository,
             PricingService pricingService,
             PriceHistoryRepository priceHistoryRepository,
-            RawGameStatRepository rawGameStatRepository
+            RawGameStatRepository rawGameStatRepository,
+            EntityManager entityManager
     ) {
         this.mlbClient = mlbClient;
         this.playerRepository = playerRepository;
         this.pricingService = pricingService;
         this.priceHistoryRepository = priceHistoryRepository;
         this.rawGameStatRepository = rawGameStatRepository;
+        this.entityManager = entityManager;
     }
 
     // Hand-rolled, dependency-free JSON encoding for a simple flat map of
@@ -129,6 +142,11 @@ public class MlbIngestionService {
                 pricingService.updatePrice(player, gameDate, weeklyProjection, adpBonus, rawStatsJson);
                 playerRepository.save(player);
                 updatedCount++;
+
+                if (updatedCount % FLUSH_EVERY_N_RECORDS == 0) {
+                    entityManager.flush();
+                    entityManager.clear();
+                }
             }
         }
         return updatedCount;
@@ -178,6 +196,11 @@ public class MlbIngestionService {
 
                 playerRepository.save(player);
                 updatedCount++;
+
+                if (updatedCount % FLUSH_EVERY_N_RECORDS == 0) {
+                    entityManager.flush();
+                    entityManager.clear();
+                }
             }
         }
 

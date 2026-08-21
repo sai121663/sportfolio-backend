@@ -1,4 +1,3 @@
-// AdminIngestionController.java
 package com.example.demo.tank01;
 
 import org.springframework.web.bind.annotation.GetMapping;
@@ -42,15 +41,29 @@ public class AdminIngestionController {
 
         int totalRecords = 0;
         int daysProcessed = 0;
+        int daysFailed = 0;
+        StringBuilder failures = new StringBuilder();
 
+        // Per-day try/catch so a single transient failure (a RapidAPI gateway
+        // hiccup reaching Tank01, a rate limit, etc.) doesn't abort the whole
+        // range -- it just gets reported and the rest of the days still run.
         for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
             String gameDate = date.format(GAME_DATE_FORMAT);
-            totalRecords += mlbIngestionService.ingestMlbFantasyData(gameDate);
-            daysProcessed++;
+            try {
+                totalRecords += mlbIngestionService.ingestMlbFantasyData(gameDate);
+                daysProcessed++;
+            } catch (Exception e) {
+                daysFailed++;
+                failures.append(gameDate).append(": ").append(e.getMessage()).append("; ");
+            }
         }
 
-        return "Backfilled " + daysProcessed + " days (" + startDate + " to " + endDate
+        String result = "Backfilled " + daysProcessed + " days (" + startDate + " to " + endDate
                 + "), " + totalRecords + " total records ingested.";
+        if (daysFailed > 0) {
+            result += " " + daysFailed + " day(s) FAILED: " + failures;
+        }
+        return result;
     }
 
     // Re-prices a date range from already-archived RawGameStat data instead
