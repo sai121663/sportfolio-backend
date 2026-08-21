@@ -28,17 +28,25 @@ public class PricingService {
 
     private static final double LEAGUE_AVG_ADP_BONUS = 50.0;
 
-    // Roughly the MLB-wide average this season -- used as the baseline for
-    // the season-long performance factor. Hitters above this OPS score above
-    // 1.0, below score under 1.0. Same idea for pitchers, but inverted (a
-    // LOWER era than this is good).
     private static final double LEAGUE_AVG_OPS = 0.715;
     private static final double LEAGUE_AVG_ERA = 4.00;
 
-    private static final double BASE_RECENT_PERFORMANCE_WEIGHT = 0.40;
-    private static final double BASE_SEASON_PERFORMANCE_WEIGHT = 0.30;
+    // ---- The weighted pricing model ----
+    // Each factor is expressed as a ratio to an "average player" baseline
+    // (1.0 = exactly average). The four ratios are blended by weights into
+    // one composite ratio, which maps straight to price: a player who's
+    // exactly average on all four scores a 1.0 composite ratio -> $100.
+    //
+    // These are the FULL-CONFIDENCE weights -- what a player with an
+    // established track record this season actually uses. Players with
+    // fewer real games played this season use a dynamically-adjusted set
+    // (see calculateEffectiveWeights) that leans more on projections/ADP
+    // instead, since recent/season performance isn't a trustworthy signal
+    // yet for someone who's barely played.
+    private static final double BASE_RECENT_PERFORMANCE_WEIGHT = 0.15;
+    private static final double BASE_SEASON_PERFORMANCE_WEIGHT = 0.50;
     private static final double BASE_PROJECTION_WEIGHT = 0.20;
-    private static final double BASE_ADP_WEIGHT = 0.10;
+    private static final double BASE_ADP_WEIGHT = 0.15;
 
     private static final int GAMES_FOR_FULL_STAT_CONFIDENCE = 30;
 
@@ -61,11 +69,11 @@ public class PricingService {
         boolean isPitcher = "P".equals(player.getPosition());
         double leagueAvgPoints = isPitcher ? LEAGUE_AVG_PITCHER_FANTASY_POINTS : LEAGUE_AVG_HITTER_FANTASY_POINTS;
 
-        // 1. Recent fantasy performance (40%) -- average points over the last
+        // 1. Recent fantasy performance (15%) -- average points over the last
         // RECENT_WINDOW_DAYS days, vs. the league-average player.
         double recentRatio = calculateRecentRatio(player, gameDate, leagueAvgPoints);
 
-        // 2. Season-long performance (30%) -- the player's REAL season-to-date
+        // 2. Season-long performance (50%) -- the player's REAL season-to-date
         // OPS/ERA, synced daily straight from MLB's own stats API by
         // MlbSeasonStatsService. Deliberately NOT based on the internally
         // tracked avgFantasyPoints below, because that field gets reset to
@@ -83,7 +91,7 @@ public class PricingService {
                 ? (weeklyProjection / GAMES_PER_WEEK) / leagueAvgPoints
                 : 1.0;
 
-        // 4. Market/ADP value (10%) -- how early this player was drafted.
+        // 4. Market/ADP value (15%) -- how early this player was drafted.
         // No ADP data at all (undrafted/deep bench) -> 0, i.e. well below average,
         // rather than a neutral 1.0 -- an unranked player shouldn't get credit
         // for market value it doesn't have.
@@ -99,21 +107,8 @@ public class PricingService {
         double targetPrice = Math.max(MIN_PRICE, 100.0 * compositeRatio);
 
         if (isNewSeason || player.getPrice() == null) {
-            // First update of a (re)started season, or no price at all yet --
-            // jump straight to the target instead of smoothing from a stale
-            // price. This matters most right after /admin/reset-pricing: an
-            // established veteran with 100+ real games played would otherwise
-            // get a tiny daily-move cap (see swingCeiling) and crawl toward
-            // their correct price for days: not because the formula is wrong,
-            // but purely because they'd been smoothing from an old, stale
-            // number. Snapping once per season avoids that without ever
-            // risking a wild jump mid-season on a single new game.
             player.setPrice(targetPrice);
         } else {
-            // Smooth toward the target instead of snapping straight to it, so
-            // one big game (or a stat correction) can't cause a wild one-day
-            // jump. The cap shrinks the more games a player has played, same
-            // philosophy as the old swing ceiling.
             int gamesPlayed = player.getGamesPlayed() != null ? player.getGamesPlayed() : 0;
             double moveCeiling = swingCeiling(gamesPlayed + 1);
             double gap = targetPrice - player.getPrice();
@@ -126,6 +121,16 @@ public class PricingService {
         savePriceHistory(player, gameDate, rawStatsJson);
     }
 
+    // Scales the recent/season weights down for players without an
+    // established track record this season, and hands that freed-up weight
+    // to projections/ADP instead -- split between the two proportionally to
+    // their normal ratio (projections carry a bit more than ADP once they're
+    // carrying extra weight, same relative split as they do normally).
+    //
+    // A brand new player with 0 real games this season: recent/season
+    // contribute nothing, weight goes ~57% projections / ~43% ADP. A player
+    // with a full established season: weights are exactly the BASE_* values
+    // (15/50/20/15). Everything in between is a smooth blend.
     private double[] calculateEffectiveWeights(Player player) {
         int gamesPlayed = player.getGamesPlayed() != null ? player.getGamesPlayed() : 0;
         double confidence = Math.min(1.0, gamesPlayed / (double) GAMES_FOR_FULL_STAT_CONFIDENCE);
@@ -143,10 +148,6 @@ public class PricingService {
         return new double[]{recentWeight, seasonWeight, projectionWeight, adpWeight};
     }
 
-    // Ratio of a player's real season-to-date OPS/ERA to the league average,
-    // as synced by MlbSeasonStatsService straight from MLB's own stats API.
-    // Returns a neutral 1.0 if we don't have real season stats for them yet
-    // (e.g. a rookie who hasn't debuted).
     private double calculateSeasonRatio(Player player, boolean isPitcher) {
         if (isPitcher && player.getEra() != null && player.getEra() > 0) {
             return LEAGUE_AVG_ERA / player.getEra();
