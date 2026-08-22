@@ -21,9 +21,19 @@ import java.util.Set;
 @Service
 public class MlbIngestionService {
 
+    // MLB game dates are always based on US time, regardless of what timezone
+    // the server itself runs in (Railway defaults to UTC).
     private static final ZoneId MLB_ZONE = ZoneId.of("America/New_York");
     private static final DateTimeFormatter GAME_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
+    // How many players to process before flushing and clearing the Hibernate
+    // session. Spring Boot keeps one database session open for the entire
+    // length of a request by default (open-session-in-view), so a long
+    // multi-day backfill would otherwise hold on to every single entity it
+    // ever touched -- players, price history, raw stat archives -- for the
+    // whole request, growing memory until the process gets OOM-killed. This
+    // periodically hands that memory back without changing anything about
+    // the actual pricing/ingestion logic.
     private static final int FLUSH_EVERY_N_RECORDS = 25;
 
     private final MlbClient mlbClient;
@@ -49,6 +59,9 @@ public class MlbIngestionService {
         this.entityManager = entityManager;
     }
 
+    // Hand-rolled, dependency-free JSON encoding for a simple flat map of
+    // string keys to primitive/string values -- avoids needing Jackson's
+    // ObjectMapper injected as a bean just for this one small use case.
     private String toJson(Map<String, Object> map) {
         if (map == null || map.isEmpty()) return "{}";
 
@@ -77,6 +90,10 @@ public class MlbIngestionService {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
+    // Hits the real Tank01 API. Fetches a day's games, box scores,
+    // projections, and ADP, prices every player who appeared, AND archives
+    // the raw stats to RawGameStat so this same day can be re-priced later
+    // (via recomputePricesFromCache) without ever calling Tank01 again.
     public int ingestMlbFantasyData(String gameDate) {
         List<String> gameIds = mlbClient.getGameIdsForDate(gameDate);
         Map<String, String> nameMap = mlbClient.getPlayerNameMap();
@@ -116,6 +133,9 @@ public class MlbIngestionService {
                     adpBonus = Math.max(0.0, 100.0 * (1 - adp / 300.0));
                 }
 
+                // Persist these onto the player itself (not just the in-memory
+                // cache in MlbClient) so recomputePricesFromCache can reuse them
+                // later without needing to call Tank01 again.
                 player.setWeeklyProjection(weeklyProjection);
                 player.setAdpBonus(adpBonus);
 
@@ -130,18 +150,44 @@ public class MlbIngestionService {
                 updatedCount++;
 
                 if (updatedCount % FLUSH_EVERY_N_RECORDS == 0) {
+                    // No entityManager.flush() here on purpose -- each save()
+                    // call above already ran (and committed) its own
+                    // transaction, so everything up to this point is already
+                    // durably persisted. flush() specifically requires an
+                    // active transaction bound to the current thread, which
+                    // won't exist here since we're between transactions --
+                    // calling it throws "No EntityManager with actual
+                    // transaction available". clear() alone is what actually
+                    // frees the memory (it detaches everything from the
+                    // session), and it doesn't need a transaction to do that.
                     entityManager.clear();
                 }
             }
         }
 
-        repriceInactivePlayers(gameDate, processedExternalIds);
+        // Single-day path: only ever needs the roster loaded once.
+        repriceInactivePlayers(gameDate, processedExternalIds, playerRepository.findAll());
 
         return updatedCount;
     }
 
-    private void repriceInactivePlayers(String gameDate, Set<String> processedExternalIds) {
-        List<Player> allPlayers = playerRepository.findAll();
+    // For every already-known MLB player who did NOT appear in today's real
+    // games (or cached raw stats, when called from recomputePricesFromCache),
+    // still run them through pricing with no new stats to roll in. Nothing
+    // about their season/projection/ADP changes just because they sat out,
+    // but the recent-form window keeps sliding forward -- so a player who
+    // stops playing (injury, benched, not called up yet) gradually reverts
+    // toward their season baseline instead of staying frozen forever at
+    // whatever price they had the day they stopped, and their card's "last
+    // week" number starts moving again instead of being stuck at exactly
+    // 0.00% indefinitely.
+    //
+    // allPlayers is passed in rather than queried here so that multi-day
+    // callers (recomputePricesFromCache) can load the roster ONCE and reuse
+    // it across every day in the range, instead of re-loading the entire
+    // player table from scratch on every single day -- that repeated
+    // findAll() was a major, unnecessary memory spike on long ranges.
+    private void repriceInactivePlayers(String gameDate, Set<String> processedExternalIds, List<Player> allPlayers) {
         int count = 0;
 
         for (Player player : allPlayers) {
@@ -155,6 +201,10 @@ public class MlbIngestionService {
                 continue;
             }
 
+            // No game today -- explicitly null this out so
+            // rollTodaysPerformanceIntoAverage skips it and today's
+            // price_history row correctly records "no game", instead of
+            // re-logging whatever points they scored in their last real game.
             player.setFantasyPoints(null);
 
             pricingService.updatePrice(player, gameDate, player.getWeeklyProjection(), player.getAdpBonus(), null);
@@ -180,10 +230,20 @@ public class MlbIngestionService {
         rawGameStatRepository.save(archive);
     }
 
+    // Re-runs PricingService over already-archived RawGameStat rows for a date
+    // range -- zero calls to Tank01, zero quota spent. Meant to be run right
+    // after /admin/reset-pricing whenever you tweak the pricing formula and
+    // want to see the result across real historical data again, without
+    // re-fetching anything. Only works for dates that were already ingested
+    // for real at least once via ingestMlbFantasyData/ingestRange.
     public int recomputePricesFromCache(String startDate, String endDate) {
         LocalDate start = LocalDate.parse(startDate, GAME_DATE_FORMAT);
         LocalDate end = LocalDate.parse(endDate, GAME_DATE_FORMAT);
         int updatedCount = 0;
+
+        // Loaded ONCE for the whole range, not once per day -- see the
+        // comment on repriceInactivePlayers for why this matters.
+        List<Player> allPlayers = playerRepository.findAll();
 
         for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
             String gameDate = date.format(GAME_DATE_FORMAT);
@@ -211,18 +271,35 @@ public class MlbIngestionService {
                 updatedCount++;
 
                 if (updatedCount % FLUSH_EVERY_N_RECORDS == 0) {
+                    // No entityManager.flush() here on purpose -- each save()
+                    // call above already ran (and committed) its own
+                    // transaction, so everything up to this point is already
+                    // durably persisted. flush() specifically requires an
+                    // active transaction bound to the current thread, which
+                    // won't exist here since we're between transactions --
+                    // calling it throws "No EntityManager with actual
+                    // transaction available". clear() alone is what actually
+                    // frees the memory (it detaches everything from the
+                    // session), and it doesn't need a transaction to do that.
                     entityManager.clear();
                 }
             }
 
-            repriceInactivePlayers(gameDate, processedExternalIds);
+            repriceInactivePlayers(gameDate, processedExternalIds, allPlayers);
         }
 
         return updatedCount;
     }
 
+    // Fires at 6:05 a.m. US Eastern time every day -- well after any MLB game
+    // could still be in progress, even for late West Coast games. Explicitly
+    // pinned to America/New_York so this means the same real-world time
+    // regardless of what timezone the server itself happens to run in.
     @Scheduled(cron = "0 5 6 * * *", zone = "America/New_York")
     public void scheduledMlbIngestion() {
+        // By 6:05 a.m. ET, the calendar has already rolled over to a new day --
+        // last night's games belong to the day that just ended, so we ingest
+        // "yesterday" (in US time), not "today".
         String gameDate = LocalDate.now(MLB_ZONE).minusDays(1).format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         int count = ingestMlbFantasyData(gameDate);
         System.out.println("Scheduled MLB ingestion complete: " + count + " records updated for " + gameDate);
