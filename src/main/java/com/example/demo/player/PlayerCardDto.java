@@ -1,3 +1,4 @@
+// PlayerCardDto.java
 package com.example.demo.player;
 
 import java.util.List;
@@ -28,4 +29,6 @@ public class PlayerCardDto {
     public Integer wins;
     public Integer losses;
     public Integer strikeouts;
+
+    public Boolean recentlyActive;
 }

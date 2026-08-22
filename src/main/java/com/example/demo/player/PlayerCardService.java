@@ -1,3 +1,4 @@
+// PlayerCardService.java
 package com.example.demo.player;
 
 import com.example.demo.pricing.PriceHistory;
@@ -9,6 +10,7 @@ import com.example.demo.trading.TradeRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -17,6 +19,9 @@ import java.util.stream.Collectors;
 public class PlayerCardService {
 
     private static final DateTimeFormatter GAME_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+    private static final int RECENTLY_ACTIVE_WINDOW_DAYS = 7;
+    private static final ZoneId MLB_ZONE = ZoneId.of("America/New_York");
 
     private final PriceHistoryRepository priceHistoryRepository;
     private final HoldingRepository holdingRepository;
@@ -79,6 +84,11 @@ public class PlayerCardService {
                 .sorted(Comparator.comparing(PriceHistory::getGameDate))
                 .collect(Collectors.toList());
 
+        LocalDate activeCutoff = LocalDate.now(MLB_ZONE).minusDays(RECENTLY_ACTIVE_WINDOW_DAYS);
+        dto.recentlyActive = sortedHistory.stream()
+                .filter(h -> h.getFantasyPoints() != null)
+                .anyMatch(h -> !LocalDate.parse(h.getGameDate(), GAME_DATE_FORMAT).isBefore(activeCutoff));
+
         if (!sortedHistory.isEmpty()) {
             List<Double> allPrices = sortedHistory.stream().map(PriceHistory::getPrice).collect(Collectors.toList());
 
@@ -90,10 +100,6 @@ public class PlayerCardService {
 
             double latest = allPrices.get(allPrices.size() - 1);
 
-            // Compare against the price from roughly a week ago, not just the
-            // previous day, so the card reflects the past week's movement.
-            // If we don't have a full week of history yet, fall back to the
-            // oldest price we do have.
             PriceHistory latestRecord = sortedHistory.get(sortedHistory.size() - 1);
             LocalDate latestDate = LocalDate.parse(latestRecord.getGameDate(), GAME_DATE_FORMAT);
             LocalDate weekAgoTarget = latestDate.minusDays(7);
