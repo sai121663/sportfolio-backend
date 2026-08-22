@@ -23,14 +23,14 @@ public class MlbIngestionService {
     private static final ZoneId MLB_ZONE = ZoneId.of("America/New_York");
     private static final DateTimeFormatter GAME_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
-    // How many players to process before flushing and clearing the Hibernate
-    // session. Spring Boot keeps one database session open for the entire
-    // length of a request by default (open-session-in-view), so a long
-    // multi-day backfill would otherwise hold on to every single entity it
-    // ever touched -- players, price history, raw stat archives -- for the
-    // whole request, growing memory until the process gets OOM-killed. This
-    // periodically hands that memory back without changing anything about
-    // the actual pricing/ingestion logic.
+    // How many players to process before clearing the Hibernate session.
+    // Spring Boot keeps one database session open for the entire length of a
+    // request by default (open-session-in-view), so a long multi-day backfill
+    // would otherwise hold on to every single entity it ever touched --
+    // players, price history, raw stat archives -- for the whole request,
+    // growing memory until the process gets OOM-killed. This periodically
+    // hands that memory back without changing anything about the actual
+    // pricing/ingestion logic.
     private static final int FLUSH_EVERY_N_RECORDS = 25;
 
     private final MlbClient mlbClient;
@@ -144,7 +144,16 @@ public class MlbIngestionService {
                 updatedCount++;
 
                 if (updatedCount % FLUSH_EVERY_N_RECORDS == 0) {
-                    entityManager.flush();
+                    // No entityManager.flush() here on purpose -- each save()
+                    // call above already ran (and committed) its own
+                    // transaction, so everything up to this point is already
+                    // durably persisted. flush() specifically requires an
+                    // active transaction bound to the current thread, which
+                    // won't exist here since we're between transactions --
+                    // calling it throws "No EntityManager with actual
+                    // transaction available". clear() alone is what actually
+                    // frees the memory (it detaches everything from the
+                    // session), and it doesn't need a transaction to do that.
                     entityManager.clear();
                 }
             }
@@ -198,7 +207,16 @@ public class MlbIngestionService {
                 updatedCount++;
 
                 if (updatedCount % FLUSH_EVERY_N_RECORDS == 0) {
-                    entityManager.flush();
+                    // No entityManager.flush() here on purpose -- each save()
+                    // call above already ran (and committed) its own
+                    // transaction, so everything up to this point is already
+                    // durably persisted. flush() specifically requires an
+                    // active transaction bound to the current thread, which
+                    // won't exist here since we're between transactions --
+                    // calling it throws "No EntityManager with actual
+                    // transaction available". clear() alone is what actually
+                    // frees the memory (it detaches everything from the
+                    // session), and it doesn't need a transaction to do that.
                     entityManager.clear();
                 }
             }
