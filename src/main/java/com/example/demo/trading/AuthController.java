@@ -1,11 +1,12 @@
+// AuthController.java
 package com.example.demo.trading;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.Instant;
@@ -35,14 +36,21 @@ public class AuthController {
             throw new IllegalArgumentException("Missing idToken");
         }
 
-        String url = "https://oauth2.googleapis.com/tokeninfo?id_token=" + request.idToken;
-        GoogleTokenInfo tokenInfo = restTemplate.getForObject(url, GoogleTokenInfo.class);
+        GoogleTokenInfo tokenInfo;
+        try {
+            String url = "https://oauth2.googleapis.com/tokeninfo?id_token=" + request.idToken;
+            tokenInfo = restTemplate.getForObject(url, GoogleTokenInfo.class);
+        } catch (RestClientException e) {
+            // Google itself rejected the token (expired, malformed, etc.) --
+            // surface that clearly instead of letting it crash as a raw 500.
+            throw new IllegalArgumentException("Google rejected this sign-in token: " + e.getMessage());
+        }
 
         if (tokenInfo == null || tokenInfo.sub == null) {
             throw new IllegalArgumentException("Invalid or expired Google token");
         }
         if (tokenInfo.aud == null || !tokenInfo.aud.equals(googleClientId)) {
-            throw new IllegalArgumentException("Token was not issued for this app");
+            throw new IllegalArgumentException("Token was not issued for this app (aud=" + tokenInfo.aud + ")");
         }
 
         User user = userRepository.findByGoogleId(tokenInfo.sub)
@@ -71,6 +79,13 @@ public class AuthController {
         response.username = user.getUsername();
         response.cashBalance = user.getCashBalance();
         return response;
+    }
+
+    // Turns our own validation failures into a clean 400 with the actual
+    // reason, instead of Spring's default raw 500 for any uncaught exception.
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<String> handleBadRequest(IllegalArgumentException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
     }
 
     public static class GoogleSignInRequest {
