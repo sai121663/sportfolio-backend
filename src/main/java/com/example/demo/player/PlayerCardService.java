@@ -1,8 +1,8 @@
-// PlayerCardService.java
 package com.example.demo.player;
 
 import com.example.demo.pricing.PriceHistory;
 import com.example.demo.pricing.PriceHistoryRepository;
+import com.example.demo.pricing.PriceHistoryRepository.PlayerPriceRange;
 import com.example.demo.trading.Holding;
 import com.example.demo.trading.HoldingRepository;
 import com.example.demo.trading.Trade;
@@ -19,9 +19,9 @@ import java.util.stream.Collectors;
 public class PlayerCardService {
 
     private static final DateTimeFormatter GAME_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
-
     private static final int RECENTLY_ACTIVE_WINDOW_DAYS = 7;
     private static final ZoneId MLB_ZONE = ZoneId.of("America/New_York");
+    private static final int HISTORY_WINDOW_DAYS = 30;
 
     private final PriceHistoryRepository priceHistoryRepository;
     private final HoldingRepository holdingRepository;
@@ -38,8 +38,15 @@ public class PlayerCardService {
     }
 
     public List<PlayerCardDto> buildCards(List<Player> players) {
-        Map<Long, List<PriceHistory>> historyByPlayer = priceHistoryRepository.findByPlayerIn(players).stream()
+        String cutoff = LocalDate.now(MLB_ZONE).minusDays(HISTORY_WINDOW_DAYS).format(GAME_DATE_FORMAT);
+
+        Map<Long, List<PriceHistory>> historyByPlayer = priceHistoryRepository
+                .findByPlayerInAndGameDateGreaterThanEqual(players, cutoff).stream()
                 .collect(Collectors.groupingBy(h -> h.getPlayer().getId()));
+
+        Map<Long, PlayerPriceRange> rangeByPlayer = priceHistoryRepository
+                .findPriceRangeByPlayers(players).stream()
+                .collect(Collectors.toMap(PlayerPriceRange::getPlayerId, r -> r));
 
         Map<Long, List<Holding>> holdingsByPlayer = holdingRepository.findByPlayerIn(players).stream()
                 .collect(Collectors.groupingBy(h -> h.getPlayer().getId()));
@@ -52,6 +59,7 @@ public class PlayerCardService {
             result.add(buildCard(
                     player,
                     historyByPlayer.getOrDefault(player.getId(), List.of()),
+                    rangeByPlayer.get(player.getId()),
                     holdingsByPlayer.getOrDefault(player.getId(), List.of()),
                     tradesByPlayer.getOrDefault(player.getId(), List.of())
             ));
@@ -59,7 +67,13 @@ public class PlayerCardService {
         return result;
     }
 
-    private PlayerCardDto buildCard(Player player, List<PriceHistory> history, List<Holding> holdings, List<Trade> trades) {
+    private PlayerCardDto buildCard(
+            Player player,
+            List<PriceHistory> history,
+            PlayerPriceRange priceRange,
+            List<Holding> holdings,
+            List<Trade> trades
+    ) {
         PlayerCardDto dto = new PlayerCardDto();
         dto.id = player.getId();
         dto.name = player.getName();
@@ -80,6 +94,9 @@ public class PlayerCardService {
         dto.losses = player.getLosses();
         dto.strikeouts = player.getStrikeouts();
 
+        dto.seasonHigh = priceRange != null && priceRange.getMaxPrice() != null ? priceRange.getMaxPrice() : player.getPrice();
+        dto.seasonLow = priceRange != null && priceRange.getMinPrice() != null ? priceRange.getMinPrice() : player.getPrice();
+
         List<PriceHistory> sortedHistory = history.stream()
                 .sorted(Comparator.comparing(PriceHistory::getGameDate))
                 .collect(Collectors.toList());
@@ -90,15 +107,12 @@ public class PlayerCardService {
                 .anyMatch(h -> !LocalDate.parse(h.getGameDate(), GAME_DATE_FORMAT).isBefore(activeCutoff));
 
         if (!sortedHistory.isEmpty()) {
-            List<Double> allPrices = sortedHistory.stream().map(PriceHistory::getPrice).collect(Collectors.toList());
+            List<Double> recentPrices = sortedHistory.stream().map(PriceHistory::getPrice).collect(Collectors.toList());
 
-            int start = Math.max(0, allPrices.size() - 20);
-            dto.priceHistory = allPrices.subList(start, allPrices.size());
+            int start = Math.max(0, recentPrices.size() - 20);
+            dto.priceHistory = recentPrices.subList(start, recentPrices.size());
 
-            dto.seasonHigh = allPrices.stream().max(Double::compareTo).orElse(player.getPrice());
-            dto.seasonLow = allPrices.stream().min(Double::compareTo).orElse(player.getPrice());
-
-            double latest = allPrices.get(allPrices.size() - 1);
+            double latest = recentPrices.get(recentPrices.size() - 1);
 
             PriceHistory latestRecord = sortedHistory.get(sortedHistory.size() - 1);
             LocalDate latestDate = LocalDate.parse(latestRecord.getGameDate(), GAME_DATE_FORMAT);
@@ -114,15 +128,13 @@ public class PlayerCardService {
                 }
             }
             if (weekAgoPrice == null) {
-                weekAgoPrice = allPrices.get(0);
+                weekAgoPrice = recentPrices.get(0);
             }
 
             dto.priceChange = latest - weekAgoPrice;
             dto.priceChangePercent = weekAgoPrice != 0 ? (dto.priceChange / weekAgoPrice) * 100.0 : 0.0;
         } else {
             dto.priceHistory = List.of();
-            dto.seasonHigh = player.getPrice();
-            dto.seasonLow = player.getPrice();
             dto.priceChange = 0.0;
             dto.priceChangePercent = 0.0;
         }

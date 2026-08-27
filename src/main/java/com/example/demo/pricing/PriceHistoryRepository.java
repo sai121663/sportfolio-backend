@@ -1,8 +1,9 @@
 package com.example.demo.pricing;
 
-import org.springframework.data.jpa.repository.JpaRepository;
-
 import com.example.demo.player.Player;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 
@@ -12,4 +13,16 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
     List<PriceHistory> findByPlayerIn(List<Player> players);
     boolean existsByPlayerAndGameDate(Player player, String gameDate);
     List<PriceHistory> findByPlayerAndGameDateBetween(Player player, String startDate, String endDate);
+
+    List<PriceHistory> findByPlayerInAndGameDateGreaterThanEqual(List<Player> players, String gameDate);
+
+    @Query("SELECT ph.player.id AS playerId, MAX(ph.price) AS maxPrice, MIN(ph.price) AS minPrice " +
+           "FROM PriceHistory ph WHERE ph.player IN :players GROUP BY ph.player.id")
+    List<PlayerPriceRange> findPriceRangeByPlayers(@Param("players") List<Player> players);
+
+    interface PlayerPriceRange {
+        Long getPlayerId();
+        Double getMaxPrice();
+        Double getMinPrice();
+    }
 }
