@@ -137,12 +137,26 @@ public class PricingService {
         return isReliever ? GAMES_FOR_FULL_STAT_CONFIDENCE_RELIEVER : GAMES_FOR_FULL_STAT_CONFIDENCE_STARTER;
     }
 
-    // Clamped to [MIN_SEASON_RATIO, MAX_SEASON_RATIO] regardless of sample
-    // size -- see that constant's comment for why.
+    // Ratio of a player's real season-to-date OPS/ERA to the league average, as
+    // synced by MlbSeasonStatsService straight from MLB's own stats API. Returns
+    // a neutral 1.0 if we don't have real season stats for them yet.
+    //
+    // Pitchers use a LINEAR formula (2 - era/avgEra) rather than the more
+    // obvious "avgEra / era" flip. That flip looks natural but is a real
+    // statistical trap: averaging a bunch of "avg / actual" ratios across a
+    // whole population does NOT come back out to 1.0 the way "actual / avg"
+    // does for hitters -- dividing a fixed number by a spread of values
+    // systematically skews the average upward (a classic bias from averaging
+    // reciprocals). At 50% weight, that quiet skew was enough to make pitchers
+    // price systematically higher than hitters overall, even though it didn't
+    // change pitcher-vs-pitcher rankings among themselves. The linear form here
+    // is symmetric with the hitter formula and doesn't have that bias: it
+    // averages back to exactly 1.0 across a population whose mean ERA equals
+    // LEAGUE_AVG_ERA, same as hitters' OPS ratio does.
     private double calculateSeasonRatio(Player player, boolean isPitcher) {
         double ratio = 1.0;
         if (isPitcher && player.getEra() != null && player.getEra() > 0) {
-            ratio = LEAGUE_AVG_ERA / player.getEra();
+            ratio = 2.0 - (player.getEra() / LEAGUE_AVG_ERA);
         } else if (!isPitcher && player.getOps() != null) {
             ratio = player.getOps() / LEAGUE_AVG_OPS;
         }
