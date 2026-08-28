@@ -1,3 +1,4 @@
+// AdminIngestionController.java
 package com.example.demo.tank01;
 
 import org.springframework.web.bind.annotation.GetMapping;
@@ -69,12 +70,29 @@ public class AdminIngestionController {
     // Re-prices a date range from already-archived RawGameStat data instead
     // of calling Tank01 -- zero API quota spent. Use this after tweaking
     // PricingService: run /admin/reset-pricing first, then hit this with the
-    // same range you already backfilled for real at least once. Much faster
-    // than ingest-range too, since there's no external HTTP calls at all.
+    // same range you already backfilled for real at least once.
+    //
+    // Runs on a background thread and returns immediately -- a full-season
+    // range can take several minutes of real work (tens of thousands of DB
+    // round trips), and Railway's own proxy will kill the HTTP connection
+    // with a 502 long before that finishes if we make the client wait on it
+    // synchronously. The actual recompute keeps running server-side
+    // regardless of the response; poll /admin/recompute-status to see how
+    // it's going, or just watch the Railway deploy logs (one line gets
+    // printed per day processed).
     @GetMapping("/admin/recompute-range")
     public String recomputeRange(@RequestParam String startDate, @RequestParam String endDate) {
-        int totalRecords = mlbIngestionService.recomputePricesFromCache(startDate, endDate);
-        return "Recomputed " + totalRecords + " records from cached data (" + startDate + " to " + endDate
-                + "). No Tank01 API calls made.";
+        boolean started = mlbIngestionService.recomputePricesFromCacheAsync(startDate, endDate);
+        if (!started) {
+            return "A recompute is already running: " + mlbIngestionService.getRecomputeStatus()
+                    + " Wait for it to finish (check /admin/recompute-status) before starting another.";
+        }
+        return "Started recomputing " + startDate + " to " + endDate + " in the background. "
+                + "Check /admin/recompute-status for progress, or watch the Railway logs.";
+    }
+
+    @GetMapping("/admin/recompute-status")
+    public String recomputeStatus() {
+        return mlbIngestionService.getRecomputeStatus();
     }
 }

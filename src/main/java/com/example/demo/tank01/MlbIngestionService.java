@@ -17,6 +17,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 public class MlbIngestionService {
@@ -42,6 +43,13 @@ public class MlbIngestionService {
     private final PriceHistoryRepository priceHistoryRepository;
     private final RawGameStatRepository rawGameStatRepository;
     private final EntityManager entityManager;
+
+    // Tracks the single background recompute job, if one is running. A plain
+    // singleton field is fine here (not a database row or a queue) since
+    // this is a solo-admin, single-server tool -- it doesn't need to survive
+    // a restart or be visible across multiple instances.
+    private final AtomicBoolean recomputeRunning = new AtomicBoolean(false);
+    private volatile String recomputeStatusMessage = "No recompute has been run yet.";
 
     public MlbIngestionService(
             MlbClient mlbClient,
@@ -230,6 +238,41 @@ public class MlbIngestionService {
         rawGameStatRepository.save(archive);
     }
 
+    // Fire-and-forget wrapper around recomputePricesFromCache. Returns false
+    // (without starting anything) if a recompute is already running, so you
+    // can't accidentally kick off two overlapping jobs. Otherwise starts the
+    // real work on a daemon background thread and returns true immediately --
+    // the caller (the controller) can respond to the HTTP request right away
+    // regardless of how long the actual recompute takes.
+    public boolean recomputePricesFromCacheAsync(String startDate, String endDate) {
+        if (!recomputeRunning.compareAndSet(false, true)) {
+            return false;
+        }
+        recomputeStatusMessage = "Running: recomputing " + startDate + " to " + endDate + "...";
+
+        Thread worker = new Thread(() -> {
+            try {
+                int count = recomputePricesFromCache(startDate, endDate);
+                recomputeStatusMessage = "Finished: recomputed " + count + " records ("
+                        + startDate + " to " + endDate + ") at " + Instant.now();
+                System.out.println(recomputeStatusMessage);
+            } catch (Exception e) {
+                recomputeStatusMessage = "FAILED recomputing " + startDate + " to " + endDate
+                        + ": " + e;
+                System.out.println(recomputeStatusMessage);
+            } finally {
+                recomputeRunning.set(false);
+            }
+        }, "recompute-range-worker");
+        worker.setDaemon(true);
+        worker.start();
+        return true;
+    }
+
+    public String getRecomputeStatus() {
+        return recomputeStatusMessage;
+    }
+
     // Re-runs PricingService over already-archived RawGameStat rows for a date
     // range -- zero calls to Tank01, zero quota spent. Meant to be run right
     // after /admin/reset-pricing whenever you tweak the pricing formula and
@@ -286,6 +329,12 @@ public class MlbIngestionService {
             }
 
             repriceInactivePlayers(gameDate, processedExternalIds, allPlayers);
+
+            // One line per day, not per record -- enough to confirm the
+            // background job is actually making progress (and roughly how
+            // fast) without flooding Railway's log rate limit the way
+            // per-record SQL logging did earlier.
+            System.out.println("Recompute progress: " + gameDate + " done, " + updatedCount + " total records so far");
         }
 
         return updatedCount;
