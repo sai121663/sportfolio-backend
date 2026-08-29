@@ -22,7 +22,11 @@ public class PricingService {
     private static final double MAX_DAILY_MOVE_PERCENT = 0.30;
     private static final double MIN_DAILY_MOVE_PERCENT = 0.08;
 
-    private static final int RECENT_WINDOW_DAYS = 15;
+    // Public so MlbIngestionService can batch-fetch this same window across
+    // every player in one query instead of one query per player -- see
+    // MlbIngestionService.fetchRecentGamesBatch. Keeping the number defined
+    // here (not duplicated there) means the two can never drift out of sync.
+    public static final int RECENT_WINDOW_DAYS = 15;
 
     private static final double LEAGUE_AVG_HITTER_FANTASY_POINTS = 1.78;
     private static final double LEAGUE_AVG_PITCHER_FANTASY_POINTS = 3.77;
@@ -35,14 +39,7 @@ public class PricingService {
     private static final double LEAGUE_AVG_ERA = 4.00;
 
     // Caps how extreme the season-performance ratio is allowed to be, no
-    // matter how good/bad the real OPS or ERA is. Without this, a pitcher
-    // with a tiny innings sample (e.g. 10-15 IP) can post a fluky ERA like
-    // 0.66 -- not real skill, just not enough innings yet for a bad outing to
-    // even out -- and 4.00 / 0.66 = 6x average, an absurd multiplier for any
-    // single factor to contribute. The confidence weighting below is a
-    // separate lever: it controls how MUCH this ratio counts for a player
-    // without an established track record. This clamp controls how extreme
-    // the ratio itself can ever be, for anyone -- established veteran or not.
+    // matter how good/bad the real OPS or ERA is.
     private static final double MIN_SEASON_RATIO = 0.5;
     private static final double MAX_SEASON_RATIO = 2.0;
 
@@ -51,9 +48,7 @@ public class PricingService {
     private static final double BASE_PROJECTION_WEIGHT = 0.20;
     private static final double BASE_ADP_WEIGHT = 0.15;
 
-    // 25% of each role's REFERENCE_SEASON_GAMES_* above, so "how big a sample
-    // counts as trustworthy" scales with each role's real workload instead of
-    // one hitter-scale number for everyone.
+    // 25% of each role's REFERENCE_SEASON_GAMES_* above.
     private static final int GAMES_FOR_FULL_STAT_CONFIDENCE_HITTER = 40;
     private static final int GAMES_FOR_FULL_STAT_CONFIDENCE_STARTER = 8;
     private static final int GAMES_FOR_FULL_STAT_CONFIDENCE_RELIEVER = 24;
@@ -64,7 +59,21 @@ public class PricingService {
         this.priceHistoryRepository = priceHistoryRepository;
     }
 
+    // Original single-player entry point -- queries the DB itself for this
+    // one player's recent window. Fine for low-volume callers (the real
+    // day-of ingestion only deals with the handful of players who actually
+    // played). Multi-day backfills should use the overload below instead.
     public void updatePrice(Player player, String gameDate, Double weeklyProjection, Double adpBonus, String rawStatsJson) {
+        updatePrice(player, gameDate, weeklyProjection, adpBonus, rawStatsJson, fetchRecentGames(player, gameDate));
+    }
+
+    // Overload for callers that have already batch-fetched everyone's recent
+    // price history in ONE query covering many players at once, instead of
+    // querying separately per player -- see MlbIngestionService's
+    // fetchRecentGamesBatch. Pass an empty list for a player with no games
+    // in the window; that's exactly equivalent to what the single-player
+    // query would have returned.
+    public void updatePrice(Player player, String gameDate, Double weeklyProjection, Double adpBonus, String rawStatsJson, List<PriceHistory> recentGames) {
         String season = getSeasonForDate(gameDate, player.getSport());
         boolean isNewSeason = player.getCurrentSeason() == null
                 || !player.getCurrentSeason().equals(season);
@@ -77,7 +86,7 @@ public class PricingService {
         boolean isPitcher = "P".equals(player.getPosition());
         double leagueAvgPoints = isPitcher ? LEAGUE_AVG_PITCHER_FANTASY_POINTS : LEAGUE_AVG_HITTER_FANTASY_POINTS;
 
-        double recentRatio = calculateRecentRatio(player, gameDate, leagueAvgPoints);
+        double recentRatio = calculateRecentRatio(recentGames, leagueAvgPoints);
         double seasonRatio = calculateSeasonRatio(player, isPitcher);
 
         double projectionRatio = weeklyProjection != null
@@ -110,6 +119,12 @@ public class PricingService {
         savePriceHistory(player, gameDate, rawStatsJson);
     }
 
+    private List<PriceHistory> fetchRecentGames(Player player, String gameDate) {
+        LocalDate latestDate = LocalDate.parse(gameDate, GAME_DATE_FORMAT);
+        String windowStart = latestDate.minusDays(RECENT_WINDOW_DAYS).format(GAME_DATE_FORMAT);
+        return priceHistoryRepository.findByPlayerAndGameDateBetween(player, windowStart, gameDate);
+    }
+
     private double[] calculateEffectiveWeights(Player player, boolean isPitcher) {
         int gamesPlayed = player.getGamesPlayed() != null ? player.getGamesPlayed() : 0;
         int gamesForFullConfidence = requiredGamesForConfidence(player, isPitcher);
@@ -137,22 +152,17 @@ public class PricingService {
         return isReliever ? GAMES_FOR_FULL_STAT_CONFIDENCE_RELIEVER : GAMES_FOR_FULL_STAT_CONFIDENCE_STARTER;
     }
 
-    // Ratio of a player's real season-to-date OPS/ERA to the league average, as
-    // synced by MlbSeasonStatsService straight from MLB's own stats API. Returns
-    // a neutral 1.0 if we don't have real season stats for them yet.
-    //
     // Pitchers use a LINEAR formula (2 - era/avgEra) rather than the more
     // obvious "avgEra / era" flip. That flip looks natural but is a real
     // statistical trap: averaging a bunch of "avg / actual" ratios across a
     // whole population does NOT come back out to 1.0 the way "actual / avg"
     // does for hitters -- dividing a fixed number by a spread of values
-    // systematically skews the average upward (a classic bias from averaging
-    // reciprocals). At 50% weight, that quiet skew was enough to make pitchers
-    // price systematically higher than hitters overall, even though it didn't
-    // change pitcher-vs-pitcher rankings among themselves. The linear form here
-    // is symmetric with the hitter formula and doesn't have that bias: it
-    // averages back to exactly 1.0 across a population whose mean ERA equals
-    // LEAGUE_AVG_ERA, same as hitters' OPS ratio does.
+    // systematically skews the average upward (a classic bias from
+    // averaging reciprocals). At 50% weight, that quiet skew was enough to
+    // make pitchers price systematically higher than hitters overall, even
+    // though it didn't change pitcher-vs-pitcher rankings among themselves.
+    // The linear form here is symmetric with the hitter formula and doesn't
+    // have that bias.
     private double calculateSeasonRatio(Player player, boolean isPitcher) {
         double ratio = 1.0;
         if (isPitcher && player.getEra() != null && player.getEra() > 0) {
@@ -163,13 +173,7 @@ public class PricingService {
         return Math.max(MIN_SEASON_RATIO, Math.min(MAX_SEASON_RATIO, ratio));
     }
 
-    private double calculateRecentRatio(Player player, String gameDate, double leagueAvgPoints) {
-        LocalDate latestDate = LocalDate.parse(gameDate, GAME_DATE_FORMAT);
-        String windowStart = latestDate.minusDays(RECENT_WINDOW_DAYS).format(GAME_DATE_FORMAT);
-
-        List<PriceHistory> recentGames = priceHistoryRepository
-                .findByPlayerAndGameDateBetween(player, windowStart, gameDate);
-
+    private double calculateRecentRatio(List<PriceHistory> recentGames, double leagueAvgPoints) {
         double avg = recentGames.stream()
                 .filter(h -> h.getFantasyPoints() != null)
                 .mapToDouble(PriceHistory::getFantasyPoints)
@@ -196,15 +200,12 @@ public class PricingService {
 
     private void rollTodaysPerformanceIntoAverage(Player player) {
         if (player.getFantasyPoints() == null) return;
-
         double todayPoints = player.getFantasyPoints();
         int gamesPlayed = player.getGamesPlayed() != null ? player.getGamesPlayed() : 0;
         Double avgSoFar = player.getAvgFantasyPoints();
-
         double newAvg = (avgSoFar != null)
                 ? ((avgSoFar * gamesPlayed) + todayPoints) / (gamesPlayed + 1)
                 : todayPoints;
-
         player.setAvgFantasyPoints(newAvg);
     }
 
@@ -221,11 +222,9 @@ public class PricingService {
 
     private String getSeasonForDate(String gameDate, String sport) {
         int year = Integer.parseInt(gameDate.substring(0, 4));
-
         if ("MLB".equals(sport)) {
             return String.valueOf(year);
         }
-
         int month = Integer.parseInt(gameDate.substring(4, 6));
         int startYear = (month >= 8) ? year : year - 1;
         int endYearShort = (startYear + 1) % 100;

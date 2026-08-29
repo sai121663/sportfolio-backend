@@ -1,6 +1,7 @@
 // MlbIngestionService.java
 package com.example.demo.tank01;
 
+import com.example.demo.pricing.PriceHistory;
 import com.example.demo.pricing.PriceHistoryRepository;
 import com.example.demo.pricing.PricingService;
 import com.example.demo.player.Player;
@@ -13,11 +14,13 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 @Service
 public class MlbIngestionService {
@@ -173,10 +176,43 @@ public class MlbIngestionService {
             }
         }
 
-        // Single-day path: only ever needs the roster loaded once.
-        repriceInactivePlayers(gameDate, processedExternalIds, playerRepository.findAll());
+        // Single-day path: only ever needs the roster loaded once, and the
+        // batched recent-games/already-priced lookups below cost just two
+        // extra queries total instead of two queries PER inactive player.
+        List<Player> allPlayers = playerRepository.findAll();
+        repriceInactivePlayers(
+                gameDate,
+                processedExternalIds,
+                allPlayers,
+                fetchRecentGamesBatch(allPlayers, gameDate),
+                fetchAlreadyPricedPlayerIds(allPlayers, gameDate)
+        );
 
         return updatedCount;
+    }
+
+    // One query covering every player's last RECENT_WINDOW_DAYS of price
+    // history for a given date, instead of one query per player. Grouped by
+    // player ID so each player's slice can be looked up in memory afterward.
+    private Map<Long, List<PriceHistory>> fetchRecentGamesBatch(List<Player> players, String gameDate) {
+        if (players.isEmpty()) return Collections.emptyMap();
+        LocalDate latestDate = LocalDate.parse(gameDate, GAME_DATE_FORMAT);
+        String windowStart = latestDate.minusDays(PricingService.RECENT_WINDOW_DAYS).format(GAME_DATE_FORMAT);
+        List<PriceHistory> windowHistory = priceHistoryRepository.findByPlayerInAndGameDateBetween(players, windowStart, gameDate);
+        return windowHistory.stream()
+                .collect(Collectors.groupingBy(ph -> ph.getPlayer().getId()));
+    }
+
+    // One query for which players already have a PriceHistory row for this
+    // exact date, instead of an existsByPlayerAndGameDate query per player.
+    // In the normal flow (reset-pricing before every recompute) this is
+    // always empty -- it's a safety net against re-running without a reset
+    // first, same as the original per-player check was.
+    private Set<Long> fetchAlreadyPricedPlayerIds(List<Player> players, String gameDate) {
+        if (players.isEmpty()) return Collections.emptySet();
+        return priceHistoryRepository.findByPlayerInAndGameDate(players, gameDate).stream()
+                .map(ph -> ph.getPlayer().getId())
+                .collect(Collectors.toSet());
     }
 
     // For every already-known MLB player who did NOT appear in today's real
@@ -190,12 +226,19 @@ public class MlbIngestionService {
     // week" number starts moving again instead of being stuck at exactly
     // 0.00% indefinitely.
     //
-    // allPlayers is passed in rather than queried here so that multi-day
-    // callers (recomputePricesFromCache) can load the roster ONCE and reuse
-    // it across every day in the range, instead of re-loading the entire
-    // player table from scratch on every single day -- that repeated
-    // findAll() was a major, unnecessary memory spike on long ranges.
-    private void repriceInactivePlayers(String gameDate, Set<String> processedExternalIds, List<Player> allPlayers) {
+    // allPlayers, recentGamesByPlayerId, and alreadyPricedPlayerIds are all
+    // passed in rather than queried here so that multi-day callers
+    // (recomputePricesFromCache) can compute them ONCE per day and reuse
+    // them, instead of re-querying per player -- that per-player querying
+    // was the main source of the memory/DB load that was crashing the
+    // server on long ranges.
+    private void repriceInactivePlayers(
+            String gameDate,
+            Set<String> processedExternalIds,
+            List<Player> allPlayers,
+            Map<Long, List<PriceHistory>> recentGamesByPlayerId,
+            Set<Long> alreadyPricedPlayerIds
+    ) {
         int count = 0;
 
         for (Player player : allPlayers) {
@@ -205,7 +248,7 @@ public class MlbIngestionService {
             if (!"MLB".equals(player.getSport()) || player.getPrice() == null) {
                 continue;
             }
-            if (priceHistoryRepository.existsByPlayerAndGameDate(player, gameDate)) {
+            if (alreadyPricedPlayerIds.contains(player.getId())) {
                 continue;
             }
 
@@ -215,7 +258,9 @@ public class MlbIngestionService {
             // re-logging whatever points they scored in their last real game.
             player.setFantasyPoints(null);
 
-            pricingService.updatePrice(player, gameDate, player.getWeeklyProjection(), player.getAdpBonus(), null);
+            List<PriceHistory> recentGames = recentGamesByPlayerId.getOrDefault(player.getId(), Collections.emptyList());
+
+            pricingService.updatePrice(player, gameDate, player.getWeeklyProjection(), player.getAdpBonus(), null, recentGames);
             playerRepository.save(player);
             count++;
 
@@ -293,6 +338,14 @@ public class MlbIngestionService {
             List<RawGameStat> cachedStats = rawGameStatRepository.findByGameDateOrderByPlayerAsc(gameDate);
             Set<String> processedExternalIds = new HashSet<>();
 
+            // Batched ONCE per day, covering every player at once -- this is
+            // the fix for the crash. It replaces what used to be roughly
+            // 700 individual per-player queries a day (one recent-window
+            // fetch + one exists-check per player) with just 2 queries total
+            // for the whole day, active players included.
+            Map<Long, List<PriceHistory>> recentGamesByPlayerId = fetchRecentGamesBatch(allPlayers, gameDate);
+            Set<Long> alreadyPricedPlayerIds = fetchAlreadyPricedPlayerIds(allPlayers, gameDate);
+
             for (RawGameStat cached : cachedStats) {
                 Player player = cached.getPlayer();
                 if (player == null) continue;
@@ -302,12 +355,15 @@ public class MlbIngestionService {
 
                 player.setFantasyPoints(cached.getFantasyPoints());
 
+                List<PriceHistory> recentGames = recentGamesByPlayerId.getOrDefault(player.getId(), Collections.emptyList());
+
                 pricingService.updatePrice(
                         player,
                         gameDate,
                         player.getWeeklyProjection(),
                         player.getAdpBonus(),
-                        cached.getRawStatsJson()
+                        cached.getRawStatsJson(),
+                        recentGames
                 );
 
                 playerRepository.save(player);
@@ -328,7 +384,7 @@ public class MlbIngestionService {
                 }
             }
 
-            repriceInactivePlayers(gameDate, processedExternalIds, allPlayers);
+            repriceInactivePlayers(gameDate, processedExternalIds, allPlayers, recentGamesByPlayerId, alreadyPricedPlayerIds);
 
             // One line per day, not per record -- enough to confirm the
             // background job is actually making progress (and roughly how
