@@ -396,6 +396,55 @@ public class MlbIngestionService {
         return updatedCount;
     }
 
+    // Same idea as recomputePricesFromCache, but scoped to exactly one
+    // player instead of everyone -- for when you've only changed something
+    // that affects a single player (like the two-way pricing formula, which
+    // only branches differently for a "TWP" player) and don't want to touch
+    // anyone else's price_history rows, or risk the memory/DB load of a
+    // full-range recompute crashing the server the way the last one did.
+    // Runs synchronously and returns directly (no background thread needed)
+    // since one player's archived games is a tiny amount of work -- Ohtani
+    // has played in maybe 100-something games all season, not the tens of
+    // thousands of rows a full-league range touches.
+    public String recomputePricesForPlayer(String name) {
+        List<Player> matches = playerRepository.findByNameContainingIgnoreCase(name);
+        if (matches.isEmpty()) {
+            return "No player found matching \"" + name + "\"";
+        }
+        if (matches.size() > 1) {
+            String names = matches.stream().map(Player::getName).collect(Collectors.joining(", "));
+            return "Multiple players matched \"" + name + "\" -- be more specific: " + names;
+        }
+        Player player = matches.get(0);
+
+        List<RawGameStat> cachedStats = rawGameStatRepository.findByPlayerOrderByGameDateAsc(player);
+        if (cachedStats.isEmpty()) {
+            return "No archived game data found for " + player.getName() + " -- nothing to recompute.";
+        }
+
+        for (RawGameStat cached : cachedStats) {
+            String gameDate = cached.getGameDate();
+            player.setFantasyPoints(cached.getFantasyPoints());
+
+            LocalDate latestDate = LocalDate.parse(gameDate, GAME_DATE_FORMAT);
+            String windowStart = latestDate.minusDays(PricingService.RECENT_WINDOW_DAYS).format(GAME_DATE_FORMAT);
+            List<PriceHistory> recentGames = priceHistoryRepository.findByPlayerAndGameDateBetween(player, windowStart, gameDate);
+
+            pricingService.updatePrice(
+                    player,
+                    gameDate,
+                    player.getWeeklyProjection(),
+                    player.getAdpBonus(),
+                    cached.getRawStatsJson(),
+                    recentGames
+            );
+        }
+        playerRepository.save(player);
+
+        return "Recomputed " + cachedStats.size() + " price_history record(s) for " + player.getName()
+                + ". New price: $" + String.format("%.2f", player.getPrice());
+    }
+
     // Fires at 6:05 a.m. US Eastern time every day -- well after any MLB game
     // could still be in progress, even for late West Coast games. Explicitly
     // pinned to America/New_York so this means the same real-world time

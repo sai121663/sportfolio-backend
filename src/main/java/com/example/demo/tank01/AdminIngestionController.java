@@ -95,4 +95,15 @@ public class AdminIngestionController {
     public String recomputeStatus() {
         return mlbIngestionService.getRecomputeStatus();
     }
+
+    // Same as recompute-range but scoped to one player by name -- zero
+    // Tank01 quota spent (same as recompute-range), and doesn't touch
+    // anyone else's price_history, so there's no risk of the memory/DB load
+    // that caused the 502s during the last full-range recompute. Runs
+    // synchronously since one player's history is small; the response IS
+    // the result, no need to poll recompute-status.
+    @GetMapping("/admin/recompute-player")
+    public String recomputePlayer(@RequestParam String name) {
+        return mlbIngestionService.recomputePricesForPlayer(name);
+    }
 }

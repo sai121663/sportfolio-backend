@@ -9,4 +9,5 @@ import java.util.List;
 public interface RawGameStatRepository extends JpaRepository<RawGameStat, Long> {
     boolean existsByPlayerAndGameDate(Player player, String gameDate);
     List<RawGameStat> findByGameDateOrderByPlayerAsc(String gameDate);
+    List<RawGameStat> findByPlayerOrderByGameDateAsc(Player player);
 }
