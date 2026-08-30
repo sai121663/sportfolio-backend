@@ -107,10 +107,12 @@ public class PlayerCardService {
                 .anyMatch(h -> !LocalDate.parse(h.getGameDate(), GAME_DATE_FORMAT).isBefore(activeCutoff));
 
         if (!sortedHistory.isEmpty()) {
+            // Only the latest price and the ~week-ago price are actually
+            // needed below -- the frontend never renders a sparkline or any
+            // other use of the full price trail, so building and shipping a
+            // priceHistory array here was pure wasted work and payload size
+            // repeated across all 700+ players on every Market load.
             List<Double> recentPrices = sortedHistory.stream().map(PriceHistory::getPrice).collect(Collectors.toList());
-
-            int start = Math.max(0, recentPrices.size() - 20);
-            dto.priceHistory = recentPrices.subList(start, recentPrices.size());
 
             double latest = recentPrices.get(recentPrices.size() - 1);
 

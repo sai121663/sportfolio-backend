@@ -1,8 +1,6 @@
 // PlayerCardDto.java
 package com.example.demo.player;
 
-import java.util.List;
-
 public class PlayerCardDto {
     public Long id;
     public String name;
@@ -19,7 +17,6 @@ public class PlayerCardDto {
     public Double volume;
     public Double seasonHigh;
     public Double seasonLow;
-    public List<Double> priceHistory;
 
     public String position;
     public Integer homeRuns;
