@@ -136,7 +136,6 @@ public class PlayerCardService {
             dto.priceChange = latest - weekAgoPrice;
             dto.priceChangePercent = weekAgoPrice != 0 ? (dto.priceChange / weekAgoPrice) * 100.0 : 0.0;
         } else {
-            dto.priceHistory = List.of();
             dto.priceChange = 0.0;
             dto.priceChangePercent = 0.0;
         }
