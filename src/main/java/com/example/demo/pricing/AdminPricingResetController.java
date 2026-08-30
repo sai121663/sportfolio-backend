@@ -34,7 +34,7 @@ public class AdminPricingResetController {
         }
         playerRepository.saveAll(players);
 
-        priceHistoryRepository.deleteAll();
+        priceHistoryRepository.deleteAllInBulk();
 
         return "Cleared currentSeason for " + players.size() + " players and wiped price_history. "
                 + "Next ingestion for each player will give them a fresh starting price.";

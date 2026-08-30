@@ -2,8 +2,10 @@ package com.example.demo.pricing;
 
 import com.example.demo.player.Player;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -27,6 +29,17 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
     @Query("SELECT ph.player.id AS playerId, MAX(ph.price) AS maxPrice, MIN(ph.price) AS minPrice " +
            "FROM PriceHistory ph WHERE ph.player IN :players GROUP BY ph.player.id")
     List<PlayerPriceRange> findPriceRangeByPlayers(@Param("players") List<Player> players);
+
+    // Replaces the default deleteAll(), which loads every row into memory as
+    // a managed entity before deleting them one at a time -- fine for a
+    // small table, but a real crash risk once price_history has built up
+    // tens of thousands of rows (which is exactly when you actually need
+    // reset-pricing to work, e.g. right after a big backfill). This runs a
+    // single SQL DELETE statement instead, with no entities loaded at all.
+    @Modifying
+    @Transactional
+    @Query("DELETE FROM PriceHistory")
+    void deleteAllInBulk();
 
     interface PlayerPriceRange {
         Long getPlayerId();
