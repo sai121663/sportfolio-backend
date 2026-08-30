@@ -26,7 +26,8 @@ public class AuthFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         boolean isProtected = path.startsWith("/portfolio/")
                 || path.startsWith("/trade")   // covers both /trade/* (buy/sell) and /trades/*
-                || path.startsWith("/watchlist");
+                || path.startsWith("/watchlist")
+                || (path.startsWith("/users/") && path.endsWith("/username"));
 
         if (!isProtected) {
             filterChain.doFilter(request, response);
@@ -80,6 +81,10 @@ public class AuthFilter extends OncePerRequestFilter {
             if (path.startsWith("/trade")) {
                 String userIdParam = request.getParameter("userId");
                 return userIdParam != null ? Long.parseLong(userIdParam) : null;
+            }
+            if (path.startsWith("/users/") && path.endsWith("/username")) {
+                String middle = path.substring("/users/".length(), path.length() - "/username".length());
+                return Long.parseLong(middle);
             }
         } catch (NumberFormatException ignored) {
         }

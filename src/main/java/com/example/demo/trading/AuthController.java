@@ -53,19 +53,21 @@ public class AuthController {
             throw new IllegalArgumentException("Token was not issued for this app (aud=" + tokenInfo.aud + ")");
         }
 
-        User user = userRepository.findByGoogleId(tokenInfo.sub)
-                .orElseGet(() -> {
-                    User u = new User();
-                    u.setGoogleId(tokenInfo.sub);
-                    u.setEmail(tokenInfo.email);
-                    u.setUsername(
-                            tokenInfo.name != null && !tokenInfo.name.isBlank()
-                                    ? tokenInfo.name
-                                    : (tokenInfo.email != null ? tokenInfo.email : "Player " + tokenInfo.sub)
-                    );
-                    u.setCashBalance(STARTING_CASH_BALANCE);
-                    return userRepository.save(u);
-                });
+        java.util.Optional<User> existingUser = userRepository.findByGoogleId(tokenInfo.sub);
+        boolean isNewUser = existingUser.isEmpty();
+
+        User user = existingUser.orElseGet(() -> {
+            User u = new User();
+            u.setGoogleId(tokenInfo.sub);
+            u.setEmail(tokenInfo.email);
+            u.setUsername(
+                    tokenInfo.name != null && !tokenInfo.name.isBlank()
+                            ? tokenInfo.name
+                            : (tokenInfo.email != null ? tokenInfo.email : "Player " + tokenInfo.sub)
+            );
+            u.setCashBalance(STARTING_CASH_BALANCE);
+            return userRepository.save(u);
+        });
 
         AuthToken authToken = new AuthToken();
         authToken.setToken(UUID.randomUUID().toString());
@@ -78,6 +80,10 @@ public class AuthController {
         response.userId = user.getId();
         response.username = user.getUsername();
         response.cashBalance = user.getCashBalance();
+        // Lets the frontend show a one-time "pick a username" prompt right
+        // after a brand-new account is created, instead of silently keeping
+        // whatever name/email Google handed over as the default forever.
+        response.isNewUser = isNewUser;
         return response;
     }
 
@@ -97,6 +103,7 @@ public class AuthController {
         public Long userId;
         public String username;
         public Double cashBalance;
+        public boolean isNewUser;
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

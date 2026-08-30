@@ -16,4 +16,7 @@ public interface WatchlistItemRepository extends JpaRepository<WatchlistItem, Lo
     // as a 500 on every /watchlist/remove call.
     @Transactional
     void deleteByUserAndPlayer(User user, Player player);
+
+    @Transactional
+    void deleteByUser(User user);
 }

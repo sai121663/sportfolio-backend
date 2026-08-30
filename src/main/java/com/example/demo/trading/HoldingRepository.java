@@ -2,6 +2,7 @@ package com.example.demo.trading;
 
 import com.example.demo.player.Player;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Optional;
 
@@ -11,4 +12,6 @@ public interface HoldingRepository extends JpaRepository<Holding, Long> {
     List<Holding> findByPlayer(Player player);
     List<Holding> findByPlayerIn(List<Player> players);
 
+    @Transactional
+    void deleteByUser(User user);
 }
