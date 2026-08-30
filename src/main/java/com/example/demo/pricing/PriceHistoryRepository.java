@@ -14,6 +14,11 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
     List<PriceHistory> findByPlayerIdOrderByRecordedAtAsc(Long playerId);
     List<PriceHistory> findByPlayerIn(List<Player> players);
     boolean existsByPlayerAndGameDate(Player player, String gameDate);
+    // Returns a List rather than an Optional/single result because rows from
+    // before the dedupe fix below may still have duplicates for a given
+    // player+date -- a single-result query would throw on those until
+    // deduplicatePriceHistory() has been run to clean them up.
+    List<PriceHistory> findByPlayerAndGameDate(Player player, String gameDate);
     List<PriceHistory> findByPlayerAndGameDateBetween(Player player, String startDate, String endDate);
 
     List<PriceHistory> findByPlayerInAndGameDateGreaterThanEqual(List<Player> players, String gameDate);
@@ -40,6 +45,26 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
     @Transactional
     @Query("DELETE FROM PriceHistory")
     void deleteAllInBulk();
+
+    // One-time cleanup for duplicate rows created before savePriceHistory
+    // was fixed to reuse an existing row instead of always inserting a new
+    // one (e.g. when a live ingestion run and a later recompute-range both
+    // priced the same player on the same date). For every (player, date)
+    // pair with more than one row, keeps only the most recently recorded one
+    // and deletes the rest -- done entirely in the database via a single
+    // native query, so it never loads the (potentially huge) table into
+    // Java memory the way a findAll()-based cleanup would.
+    @Modifying
+    @Transactional
+    @Query(value =
+            "DELETE FROM price_history WHERE id IN (" +
+            "  SELECT id FROM (" +
+            "    SELECT id, ROW_NUMBER() OVER (PARTITION BY player_id, game_date ORDER BY recorded_at DESC) AS rn " +
+            "    FROM price_history" +
+            "  ) ranked WHERE ranked.rn > 1" +
+            ")",
+            nativeQuery = true)
+    int deduplicatePriceHistory();
 
     interface PlayerPriceRange {
         Long getPlayerId();

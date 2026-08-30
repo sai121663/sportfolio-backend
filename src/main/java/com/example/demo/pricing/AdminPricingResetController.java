@@ -39,4 +39,15 @@ public class AdminPricingResetController {
         return "Cleared currentSeason for " + players.size() + " players and wiped price_history. "
                 + "Next ingestion for each player will give them a fresh starting price.";
     }
+
+    // One-time cleanup for duplicate price_history rows created before
+    // savePriceHistory was fixed to reuse an existing row instead of always
+    // inserting a new one. Safe to run any time -- it only removes true
+    // duplicates (same player, same date), keeping the most recently
+    // recorded row for each.
+    @GetMapping("/admin/dedupe-price-history")
+    public String dedupePriceHistory() {
+        int removed = priceHistoryRepository.deduplicatePriceHistory();
+        return "Removed " + removed + " duplicate price_history row(s).";
+    }
 }

@@ -209,8 +209,16 @@ public class PricingService {
         player.setAvgFantasyPoints(newAvg);
     }
 
+    // Reuses the existing row for this exact player+date if one already
+    // exists, instead of always inserting a new one. Without this, pricing
+    // the same date twice (e.g. a live ingestion run followed later by a
+    // recompute-range over an overlapping range) creates duplicate
+    // price_history rows for that day rather than updating the one that's
+    // already there.
     private void savePriceHistory(Player player, String gameDate, String rawStatsJson) {
-        PriceHistory record = new PriceHistory();
+        List<PriceHistory> existing = priceHistoryRepository.findByPlayerAndGameDate(player, gameDate);
+        PriceHistory record = existing.isEmpty() ? new PriceHistory() : existing.get(0);
+
         record.setPlayer(player);
         record.setGameDate(gameDate);
         record.setPrice(player.getPrice());
