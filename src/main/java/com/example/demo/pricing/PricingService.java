@@ -83,7 +83,12 @@ public class PricingService {
             player.setAvgFantasyPoints(null);
         }
 
-        boolean isPitcher = "P".equals(player.getPosition());
+        // Position is "SP" or "RP" for a normal pitcher now, not the raw "P"
+        // MLB's API returns -- see MlbSeasonStatsService for where that
+        // split happens. Either one still counts as "a pitcher" here; which
+        // specific role only matters for requiredGamesForConfidence/
+        // determineReferenceGames below.
+        boolean isPitcher = "SP".equals(player.getPosition()) || "RP".equals(player.getPosition());
         // MLB's Stats API reports a genuine two-way player (currently just
         // Shohei Ohtani) as "TWP" rather than "P". Rather than blending his
         // two ratios into one, he's priced as the SUM of what he'd be worth
@@ -176,8 +181,11 @@ public class PricingService {
         if (!isPitcher) {
             return GAMES_FOR_FULL_STAT_CONFIDENCE_HITTER;
         }
-        boolean isReliever = (player.getSaves() != null && player.getSaves() > 0)
-                || (player.getHolds() != null && player.getHolds() > 0);
+        // "RP" is now an explicit, reliable label (see MlbSeasonStatsService)
+        // instead of the old saves/holds guess, which misclassified a
+        // starter who'd picked up an early hold, or a true reliever who
+        // hadn't recorded a save/hold yet.
+        boolean isReliever = "RP".equals(player.getPosition());
         return isReliever ? GAMES_FOR_FULL_STAT_CONFIDENCE_RELIEVER : GAMES_FOR_FULL_STAT_CONFIDENCE_STARTER;
     }
 
@@ -216,8 +224,7 @@ public class PricingService {
         if (!isPitcher) {
             return REFERENCE_SEASON_GAMES_HITTER;
         }
-        boolean isReliever = (player.getSaves() != null && player.getSaves() > 0)
-                || (player.getHolds() != null && player.getHolds() > 0);
+        boolean isReliever = "RP".equals(player.getPosition());
         return isReliever ? REFERENCE_SEASON_GAMES_RELIEVER : REFERENCE_SEASON_GAMES_PITCHER;
     }
 

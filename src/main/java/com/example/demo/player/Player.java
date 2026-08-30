@@ -80,6 +80,11 @@ public class Player {
     private Integer holds;      // pitching only
     private Integer outs;       // pitching only -- total outs recorded this season
 
+    // Pitching only -- used to distinguish a starting pitcher from a relief
+    // pitcher (MLB's Stats API only ever labels both "P", it doesn't split
+    // them). See MlbSeasonStatsService for how this decides "SP" vs "RP".
+    private Integer gamesStarted;
+
     // Getters and setters
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -170,6 +175,9 @@ public class Player {
 
     public Integer getOuts() { return outs; }
     public void setOuts(Integer outs) { this.outs = outs; }
+
+    public Integer getGamesStarted() { return gamesStarted; }
+    public void setGamesStarted(Integer gamesStarted) { this.gamesStarted = gamesStarted; }
 
     public String getImageUrl() {
         if ("MLB".equals(sport) && externalId != null) {

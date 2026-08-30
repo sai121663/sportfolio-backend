@@ -56,7 +56,20 @@ public class MlbSeasonStatsService {
                     player.setSaves(pitching.saves);
                     player.setHolds(pitching.holds);
                     player.setOuts(pitching.outs);
+                    player.setGamesStarted(pitching.gamesStarted);
+
+                    // MLB's Stats API only ever hands back the generic "P"
+                    // for a pitcher -- it doesn't distinguish a starter from
+                    // a reliever the way it distinguishes, say, "1B" from
+                    // "OF". Any real start this season is a reliable signal
+                    // he's used as a starter; a two-way player keeps "TWP"
+                    // as-is rather than being folded into either bucket,
+                    // since his card already has its own hitting/pitching
+                    // toggle instead of a single role label.
                     if (!isTwoWay) {
+                        boolean hasStarted = pitching.gamesStarted != null && pitching.gamesStarted > 0;
+                        player.setPosition(hasStarted ? "SP" : "RP");
+
                         // These fields are shared with the hitting branch below
                         // (they mean something different for each side) -- for
                         // a normal pitcher there's no hitting branch to
@@ -130,7 +143,9 @@ public class MlbSeasonStatsService {
         Integer gamesPlayed = player.getGamesPlayed();
         if (gamesPlayed == null || gamesPlayed <= 0) return null;
 
-        if ("P".equals(player.getPosition())) {
+        // Position is now "SP" or "RP" (not the raw "P" MLB's API returns) --
+        // see the reclassification above.
+        if ("SP".equals(player.getPosition()) || "RP".equals(player.getPosition())) {
             if (player.getOuts() == null || player.getHits() == null || player.getEarnedRuns() == null
                     || player.getWalks() == null || player.getStrikeouts() == null
                     || player.getWins() == null || player.getLosses() == null

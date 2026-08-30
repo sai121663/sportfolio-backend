@@ -53,6 +53,7 @@ public class MlbStatsApiDtos {
         public Integer holds;          // pitching only
         public Integer outs;           // pitching only -- total outs recorded, cleaner
                                         // than parsing the "11.2"-style innings-pitched string
+        public Integer gamesStarted;   // pitching only -- used to tell a starter from a reliever
     }
 
     // MLB's numeric team ID (e.g. 119 for the Dodgers) -- used to build team logo
