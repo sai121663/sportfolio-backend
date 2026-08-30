@@ -84,6 +84,52 @@ public class PricingService {
         }
 
         boolean isPitcher = "P".equals(player.getPosition());
+        // MLB's Stats API reports a genuine two-way player (currently just
+        // Shohei Ohtani) as "TWP" rather than "P". Rather than blending his
+        // two ratios into one, he's priced as the SUM of what he'd be worth
+        // as a standalone hitter plus what he'd be worth as a standalone
+        // pitcher -- computeCompositeRatio below runs the exact same math
+        // used for every other player, just twice, once per side. A strong
+        // pitching performance genuinely stacks on top of his hitting price;
+        // a below-average one drags it back down, since a sub-$100 "pitcher
+        // price" contributes a negative amount to the sum.
+        boolean isTwoWay = "TWP".equals(player.getPosition());
+
+        double targetPrice;
+        if (isTwoWay) {
+            double hittingRatio = computeCompositeRatio(player, false, weeklyProjection, adpBonus, recentGames);
+            double pitchingRatio = computeCompositeRatio(player, true, weeklyProjection, adpBonus, recentGames);
+            targetPrice = Math.max(MIN_PRICE, 100.0 * hittingRatio + 100.0 * pitchingRatio);
+        } else {
+            double compositeRatio = computeCompositeRatio(player, isPitcher, weeklyProjection, adpBonus, recentGames);
+            targetPrice = Math.max(MIN_PRICE, 100.0 * compositeRatio);
+        }
+
+        if (isNewSeason || player.getPrice() == null) {
+            player.setPrice(targetPrice);
+        } else {
+            int gamesPlayed = player.getGamesPlayed() != null ? player.getGamesPlayed() : 0;
+            // isPitcher (not isTwoWay) on purpose -- a two-way player's
+            // gamesPlayed count tracks his (far more frequent) hitting
+            // games, so the hitter reference table is the consistent one to
+            // measure his day-to-day price-swing ceiling against, exactly
+            // like a normal hitter would use.
+            double moveCeiling = swingCeiling(gamesPlayed + 1, determineReferenceGames(player, isPitcher));
+            double gap = targetPrice - player.getPrice();
+            double maxMove = player.getPrice() * moveCeiling;
+            double actualMove = Math.max(-maxMove, Math.min(maxMove, gap));
+            player.setPrice(Math.max(MIN_PRICE, player.getPrice() + actualMove));
+        }
+
+        rollTodaysPerformanceIntoAverage(player);
+        savePriceHistory(player, gameDate, rawStatsJson);
+    }
+
+    // The exact same composite-ratio math every player already goes
+    // through, just pulled out into its own method so a two-way player can
+    // run it twice (once as a hitter, once as a pitcher) and have the
+    // results stacked in updatePrice above.
+    private double computeCompositeRatio(Player player, boolean isPitcher, Double weeklyProjection, Double adpBonus, List<PriceHistory> recentGames) {
         double leagueAvgPoints = isPitcher ? LEAGUE_AVG_PITCHER_FANTASY_POINTS : LEAGUE_AVG_HITTER_FANTASY_POINTS;
 
         double recentRatio = calculateRecentRatio(recentGames, leagueAvgPoints);
@@ -96,27 +142,10 @@ public class PricingService {
         double adpRatio = adpBonus != null ? adpBonus / LEAGUE_AVG_ADP_BONUS : 0.0;
 
         double[] weights = calculateEffectiveWeights(player, isPitcher);
-        double compositeRatio =
-                weights[0] * recentRatio +
+        return weights[0] * recentRatio +
                 weights[1] * seasonRatio +
                 weights[2] * projectionRatio +
                 weights[3] * adpRatio;
-
-        double targetPrice = Math.max(MIN_PRICE, 100.0 * compositeRatio);
-
-        if (isNewSeason || player.getPrice() == null) {
-            player.setPrice(targetPrice);
-        } else {
-            int gamesPlayed = player.getGamesPlayed() != null ? player.getGamesPlayed() : 0;
-            double moveCeiling = swingCeiling(gamesPlayed + 1, determineReferenceGames(player, isPitcher));
-            double gap = targetPrice - player.getPrice();
-            double maxMove = player.getPrice() * moveCeiling;
-            double actualMove = Math.max(-maxMove, Math.min(maxMove, gap));
-            player.setPrice(Math.max(MIN_PRICE, player.getPrice() + actualMove));
-        }
-
-        rollTodaysPerformanceIntoAverage(player);
-        savePriceHistory(player, gameDate, rawStatsJson);
     }
 
     private List<PriceHistory> fetchRecentGames(Player player, String gameDate) {
@@ -237,6 +266,5 @@ public class PricingService {
         int startYear = (month >= 8) ? year : year - 1;
         int endYearShort = (startYear + 1) % 100;
         return String.format("%d-%02d", startYear, endYearShort);
-    
     }
 }

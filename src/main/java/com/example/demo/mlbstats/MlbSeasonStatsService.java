@@ -36,33 +36,46 @@ public class MlbSeasonStatsService {
 
             player.setPosition(position);
 
-            if ("P".equals(position)) {
+            // MLB's own Stats API reports a genuine two-way player (currently
+            // just Shohei Ohtani) with the official position code "TWP"
+            // rather than "P" -- so without this check he'd fall into the
+            // hitting-only branch below and his pitching stats (and
+            // therefore his pitching performance) would never factor into
+            // his price at all. For a TWP, fetch BOTH stat groups instead of
+            // picking one.
+            boolean isTwoWay = "TWP".equals(position);
+
+            if ("P".equals(position) || isTwoWay) {
                 MlbStatsApiDtos.StatBlock pitching =
                         mlbStatsApiClient.getPitchingSeasonStats(player.getExternalId(), season);
                 if (pitching != null) {
                     player.setEra(pitching.era != null ? Double.parseDouble(pitching.era) : null);
                     player.setWins(pitching.wins);
                     player.setLosses(pitching.losses);
-                    player.setStrikeouts(pitching.strikeOuts);
-                    player.setHits(pitching.hits);
-                    player.setWalks(pitching.baseOnBalls);
                     player.setEarnedRuns(pitching.earnedRuns);
                     player.setSaves(pitching.saves);
                     player.setHolds(pitching.holds);
                     player.setOuts(pitching.outs);
-                    if (pitching.gamesPlayed != null) {
-                        player.setGamesPlayed(pitching.gamesPlayed);
+                    if (!isTwoWay) {
+                        // These fields are shared with the hitting branch below
+                        // (they mean something different for each side) -- for
+                        // a normal pitcher there's no hitting branch to
+                        // conflict with, but for a two-way player we let the
+                        // hitting numbers win below, since that's the far more
+                        // frequent, representative side of his workload.
+                        player.setStrikeouts(pitching.strikeOuts);
+                        player.setHits(pitching.hits);
+                        player.setWalks(pitching.baseOnBalls);
+                        if (pitching.gamesPlayed != null) {
+                            player.setGamesPlayed(pitching.gamesPlayed);
+                        }
                     }
                     if (pitching.team != null) {
                         player.setTeamId(pitching.team.id);
                     }
-
-                    Double trueAvg = calculateTrueSeasonAvgFantasyPoints(player);
-                    if (trueAvg != null) {
-                        player.setAvgFantasyPoints(trueAvg);
-                    }
                 }
-            } else {
+            }
+            if (!"P".equals(position) || isTwoWay) {
                 MlbStatsApiDtos.StatBlock hitting =
                         mlbStatsApiClient.getHittingSeasonStats(player.getExternalId(), season);
                 if (hitting != null) {
@@ -83,12 +96,12 @@ public class MlbSeasonStatsService {
                     if (hitting.team != null) {
                         player.setTeamId(hitting.team.id);
                     }
-
-                    Double trueAvg = calculateTrueSeasonAvgFantasyPoints(player);
-                    if (trueAvg != null) {
-                        player.setAvgFantasyPoints(trueAvg);
-                    }
                 }
+            }
+
+            Double trueAvg = calculateTrueSeasonAvgFantasyPoints(player);
+            if (trueAvg != null) {
+                player.setAvgFantasyPoints(trueAvg);
             }
 
             playerRepository.save(player);
