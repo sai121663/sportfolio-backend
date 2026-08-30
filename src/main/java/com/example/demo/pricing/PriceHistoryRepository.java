@@ -16,6 +16,14 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
 
     List<PriceHistory> findByPlayerInAndGameDateGreaterThanEqual(List<Player> players, String gameDate);
 
+    // The batched replacements for the per-player queries above -- one query
+    // covering every player in the list at once, instead of one query per
+    // player. Used by MlbIngestionService during multi-day backfills, where
+    // looping hundreds of players through a per-player query each day was
+    // generating tens of thousands of round trips and crashing the server.
+    List<PriceHistory> findByPlayerInAndGameDateBetween(List<Player> players, String startDate, String endDate);
+    List<PriceHistory> findByPlayerInAndGameDate(List<Player> players, String gameDate);
+
     @Query("SELECT ph.player.id AS playerId, MAX(ph.price) AS maxPrice, MIN(ph.price) AS minPrice " +
            "FROM PriceHistory ph WHERE ph.player IN :players GROUP BY ph.player.id")
     List<PlayerPriceRange> findPriceRangeByPlayers(@Param("players") List<Player> players);
