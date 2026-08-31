@@ -46,7 +46,7 @@ public class PricingService {
     // counting stats. Without this, splitting the baseline evenly would
     // let a great reliever price the same as a great starter, which
     // erases a real and intentional value gap between the two roles.
-    private static final double RELIEVER_VALUE_DISCOUNT = 0.75;
+    private static final double RELIEVER_VALUE_DISCOUNT = 0.85;
 
     private static final double GAMES_PER_WEEK = 6.0;
 
