@@ -30,15 +30,18 @@ public class AdminPlayerDebugController {
     private final MlbClient mlbClient;
     private final PlayerRepository playerRepository;
     private final PriceHistoryRepository priceHistoryRepository;
+    private final RawGameStatRepository rawGameStatRepository;
 
     public AdminPlayerDebugController(
             MlbClient mlbClient,
             PlayerRepository playerRepository,
-            PriceHistoryRepository priceHistoryRepository
+            PriceHistoryRepository priceHistoryRepository,
+            RawGameStatRepository rawGameStatRepository
     ) {
         this.mlbClient = mlbClient;
         this.playerRepository = playerRepository;
         this.priceHistoryRepository = priceHistoryRepository;
+        this.rawGameStatRepository = rawGameStatRepository;
     }
 
     // Looks up the raw projection + ADP data Tank01 returns for any player
@@ -105,6 +108,47 @@ public class AdminPlayerDebugController {
         result.put("player", player.getName());
         result.put("currentPrice", player.getPrice());
         result.put("history", rows);
+        return result;
+    }
+
+    // Computes the REAL average fantasy points per appearance for starters,
+    // relievers, and hitters, straight from the permanent RawGameStat
+    // archive -- zero Tank01 cost, since this only reads data already
+    // sitting in Postgres. Used to calibrate PricingService's per-role
+    // baselines (LEAGUE_AVG_*_FANTASY_POINTS) with real numbers instead of
+    // guesses. A player's CURRENT position is applied to all of their
+    // historical rows, so someone who changed roles mid-season (e.g. a
+    // reliever promoted to starter) has their whole history counted under
+    // their current role -- a reasonable approximation, not exact. TWP
+    // (Ohtani) rows are skipped entirely since a single day's fantasyPoints
+    // there blends his hitting and pitching lines together and would muddy
+    // both buckets.
+    @GetMapping("/admin/fantasy-points-breakdown")
+    public Map<String, Object> fantasyPointsBreakdown() {
+        double spTotal = 0, rpTotal = 0, hitterTotal = 0;
+        int spCount = 0, rpCount = 0, hitterCount = 0;
+
+        for (RawGameStat g : rawGameStatRepository.findAll()) {
+            if (g.getFantasyPoints() == null || g.getPlayer() == null) continue;
+            String position = g.getPlayer().getPosition();
+            if ("TWP".equals(position)) continue;
+
+            if ("SP".equals(position)) {
+                spTotal += g.getFantasyPoints();
+                spCount++;
+            } else if ("RP".equals(position)) {
+                rpTotal += g.getFantasyPoints();
+                rpCount++;
+            } else {
+                hitterTotal += g.getFantasyPoints();
+                hitterCount++;
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("SP", Map.of("avgFantasyPoints", spCount > 0 ? spTotal / spCount : null, "appearances", spCount));
+        result.put("RP", Map.of("avgFantasyPoints", rpCount > 0 ? rpTotal / rpCount : null, "appearances", rpCount));
+        result.put("Hitter", Map.of("avgFantasyPoints", hitterCount > 0 ? hitterTotal / hitterCount : null, "appearances", hitterCount));
         return result;
     }
 }
