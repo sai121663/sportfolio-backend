@@ -65,6 +65,15 @@ public class PricingService {
     private static final double BASE_PROJECTION_WEIGHT = 0.20;
     private static final double BASE_ADP_WEIGHT = 0.15;
 
+    // Relievers essentially never have real ADP data (Tank01 barely tracks
+    // draft stock for bullpen arms), so BASE_ADP_WEIGHT would otherwise
+    // always contribute a hard 0 for them -- not "no opinion", an actual
+    // zero that (unlike the confidence-based redistribution below) never
+    // gets reassigned anywhere else. For relievers only, that 15% is split
+    // evenly into recent form and season performance instead, so their
+    // price is built from a formula that can still reach its full weight.
+    private static final double RELIEVER_ADP_REDISTRIBUTION = BASE_ADP_WEIGHT / 2.0;
+
     // 25% of each role's REFERENCE_SEASON_GAMES_* above.
     private static final int GAMES_FOR_FULL_STAT_CONFIDENCE_HITTER = 40;
     private static final int GAMES_FOR_FULL_STAT_CONFIDENCE_STARTER = 8;
@@ -188,19 +197,31 @@ public class PricingService {
     }
 
     private double[] calculateEffectiveWeights(Player player, boolean isPitcher) {
+        // Reliever-only base weights: ADP's 15% moves into recent/season
+        // (7.5% each) instead of starting from a base that can never be
+        // fully earned. Everyone else keeps the normal base weights.
+        boolean isReliever = isPitcher && "RP".equals(player.getPosition());
+        double baseRecentWeight = BASE_RECENT_PERFORMANCE_WEIGHT + (isReliever ? RELIEVER_ADP_REDISTRIBUTION : 0.0);
+        double baseSeasonWeight = BASE_SEASON_PERFORMANCE_WEIGHT + (isReliever ? RELIEVER_ADP_REDISTRIBUTION : 0.0);
+        double baseAdpWeight = isReliever ? 0.0 : BASE_ADP_WEIGHT;
+
         int gamesPlayed = player.getGamesPlayed() != null ? player.getGamesPlayed() : 0;
         int gamesForFullConfidence = requiredGamesForConfidence(player, isPitcher);
         double confidence = Math.min(1.0, gamesPlayed / (double) gamesForFullConfidence);
 
-        double recentWeight = BASE_RECENT_PERFORMANCE_WEIGHT * confidence;
-        double seasonWeight = BASE_SEASON_PERFORMANCE_WEIGHT * confidence;
+        double recentWeight = baseRecentWeight * confidence;
+        double seasonWeight = baseSeasonWeight * confidence;
 
-        double freedUpWeight = (BASE_RECENT_PERFORMANCE_WEIGHT + BASE_SEASON_PERFORMANCE_WEIGHT) * (1 - confidence);
-        double projectionShare = BASE_PROJECTION_WEIGHT / (BASE_PROJECTION_WEIGHT + BASE_ADP_WEIGHT);
-        double adpShare = BASE_ADP_WEIGHT / (BASE_PROJECTION_WEIGHT + BASE_ADP_WEIGHT);
+        // For a reliever, baseAdpWeight is 0, so adpShare naturally comes out
+        // to 0 too -- all freed-up weight (from low confidence) goes to
+        // projection alone instead of splitting with a category that would
+        // never contribute anything for this player anyway.
+        double freedUpWeight = (baseRecentWeight + baseSeasonWeight) * (1 - confidence);
+        double projectionShare = BASE_PROJECTION_WEIGHT / (BASE_PROJECTION_WEIGHT + baseAdpWeight);
+        double adpShare = baseAdpWeight / (BASE_PROJECTION_WEIGHT + baseAdpWeight);
 
         double projectionWeight = BASE_PROJECTION_WEIGHT + freedUpWeight * projectionShare;
-        double adpWeight = BASE_ADP_WEIGHT + freedUpWeight * adpShare;
+        double adpWeight = baseAdpWeight + freedUpWeight * adpShare;
 
         return new double[]{recentWeight, seasonWeight, projectionWeight, adpWeight};
     }
