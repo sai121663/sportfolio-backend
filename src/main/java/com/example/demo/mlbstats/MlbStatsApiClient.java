@@ -63,8 +63,20 @@ public class MlbStatsApiClient {
             // "team" lives alongside "stat" in the real response, not nested inside
             // it -- copy it over onto the StatBlock so callers can keep reading
             // stat.team like before, without needing to know about Split at all.
+            //
+            // For a player traded mid-season, MLB's API adds an extra split at
+            // index 0: his combined season totals across every team he played
+            // for, which is exactly the aggregate we want for pricing -- but
+            // that entry has no team attached (he wasn't on just one), so
+            // split.team is null here. The per-team stints follow after it, so
+            // fall back to the LAST split's team (his most recent one) purely
+            // for display purposes, without touching which stat totals get used.
+            MlbStatsApiDtos.Team team = split.team;
+            if (team == null && firstGroup.splits.size() > 1) {
+                team = firstGroup.splits.get(firstGroup.splits.size() - 1).team;
+            }
             if (stat != null) {
-                stat.team = split.team;
+                stat.team = team;
             }
 
             return stat;
