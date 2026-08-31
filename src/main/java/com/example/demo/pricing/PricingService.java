@@ -29,7 +29,24 @@ public class PricingService {
     public static final int RECENT_WINDOW_DAYS = 15;
 
     private static final double LEAGUE_AVG_HITTER_FANTASY_POINTS = 1.78;
-    private static final double LEAGUE_AVG_PITCHER_FANTASY_POINTS = 3.77;
+    // Used to be one blended LEAGUE_AVG_PITCHER_FANTASY_POINTS (3.77) shared
+    // by starters and relievers -- but that blended number sat in between
+    // the two, so starters (who really average ~6.1, per a real breakdown of
+    // every archived RawGameStat) always cleared it easily and looked
+    // superhuman, while relievers (who really average ~2.5) always fell
+    // short of it and looked mediocre. Splitting into each role's own real,
+    // correctly-calibrated average fixes that skew.
+    private static final double LEAGUE_AVG_STARTER_FANTASY_POINTS = 6.14;
+    private static final double LEAGUE_AVG_RELIEVER_FANTASY_POINTS = 2.46;
+
+    // On top of (not instead of) the fair, real baseline above -- a
+    // deliberate discount, not a bug fix. Even a fairly-graded, elite
+    // relief outing is worth less raw roster value than an elite start,
+    // since one great inning can't match seven great innings' worth of
+    // counting stats. Without this, splitting the baseline evenly would
+    // let a great reliever price the same as a great starter, which
+    // erases a real and intentional value gap between the two roles.
+    private static final double RELIEVER_VALUE_DISCOUNT = 0.6;
 
     private static final double GAMES_PER_WEEK = 6.0;
 
@@ -135,7 +152,13 @@ public class PricingService {
     // run it twice (once as a hitter, once as a pitcher) and have the
     // results stacked in updatePrice above.
     private double computeCompositeRatio(Player player, boolean isPitcher, Double weeklyProjection, Double adpBonus, List<PriceHistory> recentGames) {
-        double leagueAvgPoints = isPitcher ? LEAGUE_AVG_PITCHER_FANTASY_POINTS : LEAGUE_AVG_HITTER_FANTASY_POINTS;
+        // Ohtani's pitching side is priced like a starter on purpose -- he
+        // only ever starts when he pitches, so "TWP" falls through to the
+        // starter baseline/no-discount branch below, same as a normal SP.
+        boolean isReliever = isPitcher && "RP".equals(player.getPosition());
+        double leagueAvgPoints = !isPitcher
+                ? LEAGUE_AVG_HITTER_FANTASY_POINTS
+                : (isReliever ? LEAGUE_AVG_RELIEVER_FANTASY_POINTS : LEAGUE_AVG_STARTER_FANTASY_POINTS);
 
         double recentRatio = calculateRecentRatio(recentGames, leagueAvgPoints);
         double seasonRatio = calculateSeasonRatio(player, isPitcher);
@@ -147,10 +170,15 @@ public class PricingService {
         double adpRatio = adpBonus != null ? adpBonus / LEAGUE_AVG_ADP_BONUS : 0.0;
 
         double[] weights = calculateEffectiveWeights(player, isPitcher);
-        return weights[0] * recentRatio +
+        double ratio = weights[0] * recentRatio +
                 weights[1] * seasonRatio +
                 weights[2] * projectionRatio +
                 weights[3] * adpRatio;
+
+        // Applied after everything else so it uniformly discounts every
+        // component (recent form, season ERA, projection, ADP) rather than
+        // just the fantasy-points baseline above.
+        return isReliever ? ratio * RELIEVER_VALUE_DISCOUNT : ratio;
     }
 
     private List<PriceHistory> fetchRecentGames(Player player, String gameDate) {
