@@ -95,7 +95,7 @@ public class NflIngestionService {
     public int ingestNflFantasyData(int week, int season, String seasonType, String gameDate) {
         List<String> gameIds = nflClient.getGameIdsForWeek(week, season, seasonType);
         Map<String, Tank01Dtos.NflPlayerInfo> playerInfoMap = nflClient.getPlayerInfoMap();
-        Map<String, Tank01Dtos.PlayerProjection> projections = nflClient.getProjections();
+        Map<String, Tank01Dtos.PlayerProjection> projections = nflClient.getProjections(week, season);
         Map<String, Double> adpMap = nflClient.getAdpMap();
 
         int updatedCount = 0;
@@ -181,9 +181,12 @@ public class NflIngestionService {
     // projections) -- gamesPlayed stays untouched, so it never fakes real
     // game history, and an already-seeded player just gets a gentle nudge
     // toward the refreshed target instead of a jump.
-    public int seedNflPricesFromProjections() {
+    public int seedNflPricesFromProjections(int season) {
         Map<String, Tank01Dtos.NflPlayerInfo> playerInfoMap = nflClient.getPlayerInfoMap();
-        Map<String, Tank01Dtos.PlayerProjection> projections = nflClient.getProjections();
+        // Week 1 -- there's no real game yet to project "recent"/"season"
+        // form from, so the opening week's projection is the closest thing
+        // to "expected production entering the season" that exists.
+        Map<String, Tank01Dtos.PlayerProjection> projections = nflClient.getProjections(1, season);
         Map<String, Double> adpMap = nflClient.getAdpMap();
 
         String seedDate = LocalDate.now(ET_ZONE).format(GAME_DATE_FORMAT);

@@ -19,22 +19,22 @@ import java.util.stream.Collectors;
 // family as MlbClient, just a separate host and "NFL"-prefixed endpoints,
 // same as how Tank01 splits MLB and NBA into their own hosts too.
 //
-// NOTE: unlike MlbClient/Tank01Client (which were built and tested against
-// real responses), these exact endpoint paths/params are inferred from
-// Tank01's consistent naming convention across their MLB/NBA/NFL products
-// (getMLBGamesForDate -> getNFLGamesForWeek, getMLBBoxScore ->
-// getNFLBoxScore, etc.) rather than confirmed against live NFL docs. Every
-// call here already fails soft (empty list/map, not an exception) via the
-// same try/catch pattern used elsewhere, so a wrong endpoint name just means
-// "found nothing" the first time this runs -- worth a quick real test call
-// before trusting it for anything.
+// All four endpoint names/params below are now confirmed against real
+// working curl examples (which is also what caught the host name needing a
+// trailing "-nfl" the naming-convention guess had missed). What's still
+// unconfirmed is the exact response SHAPE for getGameIdsForWeek/getBoxScore/
+// getPlayerInfoMap -- the DTOs they parse into (ScheduleResponse,
+// NflBoxScoreResponse, NflPlayerListResponse) are still guesses. Every call
+// here fails soft (empty list/map, not an exception), so a shape mismatch
+// just means "found nothing," not a crash -- worth checking a real response
+// against these DTOs once there's live data to test with.
 @Component
 public class NflClient {
 
     @Value("${rapidapi.key}")
     private String apiKey;
 
-    private static final String HOST = "tank01-nfl-live-in-game-real-time-statistics.p.rapidapi.com";
+    private static final String HOST = "tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com";
     private final RestTemplate restTemplate = new RestTemplate();
 
     // Same reasoning as MlbClient's cache -- the full player list and
@@ -46,6 +46,7 @@ public class NflClient {
     private Instant playerInfoCachedAt;
 
     private Map<String, Tank01Dtos.PlayerProjection> cachedProjections;
+    private String cachedProjectionsKey;
     private Instant projectionsCachedAt;
 
     private Map<String, Double> cachedAdpMap;
@@ -60,6 +61,47 @@ public class NflClient {
         headers.set("x-rapidapi-key", apiKey);
         headers.set("x-rapidapi-host", HOST);
         return headers;
+    }
+
+    // Shared by getProjections and getBoxScore -- both need the SAME
+    // scoring ruleset spelled out as query params, since Tank01 has no
+    // single "fantasyPoints=true" shortcut for NFL the way MLB/NBA do.
+    // Standardized to half-PPR to match getAdpMap's adpType=halfPPR --
+    // the confirmed curl examples for projections and box score actually
+    // used two different, inconsistent rulesets (full-PPR vs half-PPR,
+    // among other small differences), which would have made projected and
+    // actual fantasy points not comparable to each other. If you want a
+    // different scoring system, change it here once and every caller stays
+    // in sync automatically.
+    private UriComponentsBuilder addScoringWeights(UriComponentsBuilder builder) {
+        return builder
+                .queryParam("twoPointConversions", "2")
+                .queryParam("passYards", ".04")
+                .queryParam("passAttempts", "0")
+                .queryParam("passTD", "4")
+                .queryParam("passCompletions", "0")
+                .queryParam("passInterceptions", "-2")
+                .queryParam("pointsPerReception", ".5")
+                .queryParam("carries", ".2")
+                .queryParam("rushYards", ".1")
+                .queryParam("rushTD", "6")
+                .queryParam("fumbles", "-2")
+                .queryParam("receivingYards", ".1")
+                .queryParam("receivingTD", "6")
+                .queryParam("targets", "0")
+                .queryParam("defTD", "0")
+                .queryParam("fgMade", "3")
+                .queryParam("fgMissed", "-1")
+                .queryParam("xpMade", "1")
+                .queryParam("xpMissed", "-1")
+                .queryParam("idpTotalTackles", "0")
+                .queryParam("idpSoloTackles", "0")
+                .queryParam("idpTFL", "0")
+                .queryParam("idpQbHits", "0")
+                .queryParam("idpInt", "0")
+                .queryParam("idpSacks", "0")
+                .queryParam("idpPassDeflections", "0")
+                .queryParam("idpFumblesRecovered", "0");
     }
 
     // NFL games are weekly, not daily -- week/season/seasonType together
@@ -87,9 +129,14 @@ public class NflClient {
     }
 
     public List<Tank01Dtos.NflPlayerStat> getBoxScore(String gameId) {
-        String url = UriComponentsBuilder.fromUriString("https://" + HOST + "/getNFLBoxScore")
-                .queryParam("gameID", gameId)
-                .queryParam("fantasyPoints", "true")
+        String url = addScoringWeights(
+                UriComponentsBuilder.fromUriString("https://" + HOST + "/getNFLBoxScore")
+                        .queryParam("gameID", gameId)
+                        .queryParam("fantasyPoints", "true")
+                        // Play-by-play detail isn't used for anything -- leave it
+                        // off to keep the response smaller/faster.
+                        .queryParam("playByPlay", "false")
+        )
                 .build()
                 .encode()
                 .toUriString();
@@ -117,7 +164,13 @@ public class NflClient {
             return cachedPlayerInfo;
         }
 
-        String url = "https://" + HOST + "/getNFLPlayerList";
+        // all=true -- without it, this only returns a partial/notable-players
+        // subset instead of the full league roster.
+        String url = UriComponentsBuilder.fromUriString("https://" + HOST + "/getNFLPlayerList")
+                .queryParam("all", "true")
+                .build()
+                .encode()
+                .toUriString();
         Map<String, Tank01Dtos.NflPlayerInfo> playerInfo = new HashMap<>();
         try {
             HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());
@@ -141,13 +194,31 @@ public class NflClient {
         return playerInfo;
     }
 
-    public Map<String, Tank01Dtos.PlayerProjection> getProjections() {
-        if (!isExpired(projectionsCachedAt)) {
+    // Tank01's NFL projections are WEEKLY (unlike MLB's 7-day-ahead
+    // projection), and -- unlike MLB/NBA -- require every scoring weight
+    // spelled out explicitly as query params rather than a single
+    // "fantasyPoints=true" flag (see addScoringWeights). Cached by
+    // week+season so a multi-week backfill doesn't re-fetch the same
+    // week's projections over and over, same reasoning as the 24h TTL on
+    // the other cached lookups.
+    public Map<String, Tank01Dtos.PlayerProjection> getProjections(int week, int season) {
+        String cacheKey = week + "-" + season;
+        if (!isExpired(projectionsCachedAt) && cacheKey.equals(cachedProjectionsKey)) {
             return cachedProjections;
         }
 
-        String url = UriComponentsBuilder.fromUriString("https://" + HOST + "/getNFLProjections")
-                .queryParam("fantasyPoints", "true")
+        String url = addScoringWeights(
+                UriComponentsBuilder.fromUriString("https://" + HOST + "/getNFLProjections")
+                        .queryParam("week", week)
+                        .queryParam("archiveSeason", season)
+                        // No itemFormat param -- omitting it gets the default map-
+                        // keyed-by-playerID shape, matching ProjectionsResponse's
+                        // DTO (same as MLB/NBA's projections endpoints, which use
+                        // this same shape without needing itemFormat at all). The
+                        // confirmed curl example passed itemFormat=list, but
+                        // that's an alternate shape this DTO doesn't parse --
+                        // worth switching to if the map format doesn't pan out.
+        )
                 .build()
                 .encode()
                 .toUriString();
@@ -168,16 +239,22 @@ public class NflClient {
         }
 
         cachedProjections = projections;
+        cachedProjectionsKey = cacheKey;
         projectionsCachedAt = Instant.now();
         return projections;
     }
 
+    // Half-PPR ADP, confirmed against the real endpoint.
     public Map<String, Double> getAdpMap() {
         if (!isExpired(adpMapCachedAt)) {
             return cachedAdpMap;
         }
 
-        String url = "https://" + HOST + "/getNFLADP";
+        String url = UriComponentsBuilder.fromUriString("https://" + HOST + "/getNFLADP")
+                .queryParam("adpType", "halfPPR")
+                .build()
+                .encode()
+                .toUriString();
         Map<String, Double> adpMap = new HashMap<>();
         try {
             HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());

@@ -130,8 +130,8 @@ public class AdminIngestionController {
     // projection/ADP alone -- no games needed, so this can run before the
     // season even starts. Safe to re-run any time before kickoff.
     @GetMapping("/admin/seed-nfl-prices")
-    public String seedNflPrices() {
-        int count = nflIngestionService.seedNflPricesFromProjections();
+    public String seedNflPrices(@RequestParam int season) {
+        int count = nflIngestionService.seedNflPricesFromProjections(season);
         return "Seeded starting prices for " + count + " NFL skill-position players.";
     }
 }
