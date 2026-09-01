@@ -156,6 +156,20 @@ public class NflClient {
         }
     }
 
+    // TEMPORARY debug helper -- returns the raw, unparsed JSON string so a
+    // real response can be inspected directly instead of guessing why the
+    // typed DTO parse came back empty. Remove once getPlayerInfoMap's
+    // parsing is confirmed working against a real response.
+    public String getRawPlayerListJson() {
+        String url = UriComponentsBuilder.fromUriString("https://" + HOST + "/getNFLPlayerList")
+                .queryParam("all", "true")
+                .build()
+                .encode()
+                .toUriString();
+        HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());
+        return restTemplate.exchange(url, HttpMethod.GET, entity, String.class).getBody();
+    }
+
     // Keyed by Tank01's playerID -- includes name/team/position/espnID so
     // NflIngestionService doesn't need a second lookup just to filter to
     // skill positions or build a headshot URL.

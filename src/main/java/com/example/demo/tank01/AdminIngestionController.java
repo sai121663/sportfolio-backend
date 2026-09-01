@@ -19,10 +19,12 @@ public class AdminIngestionController {
 
     private final MlbIngestionService mlbIngestionService;
     private final NflIngestionService nflIngestionService;
+    private final NflClient nflClient;
 
-    public AdminIngestionController(MlbIngestionService mlbIngestionService, NflIngestionService nflIngestionService) {
+    public AdminIngestionController(MlbIngestionService mlbIngestionService, NflIngestionService nflIngestionService, NflClient nflClient) {
         this.mlbIngestionService = mlbIngestionService;
         this.nflIngestionService = nflIngestionService;
+        this.nflClient = nflClient;
     }
 
     @GetMapping("/admin/ingest-mlb")
@@ -133,5 +135,16 @@ public class AdminIngestionController {
     public String seedNflPrices(@RequestParam int season) {
         int count = nflIngestionService.seedNflPricesFromProjections(season);
         return "Seeded starting prices for " + count + " NFL skill-position players.";
+    }
+
+    // TEMPORARY -- raw, unparsed getNFLPlayerList response (first 4000 chars)
+    // so the real field names/shape can be checked directly instead of
+    // guessing why the typed parse came back with 0 players. Remove once
+    // NflClient.getPlayerInfoMap's parsing is confirmed correct.
+    @GetMapping("/admin/debug-nfl-player-list")
+    public String debugNflPlayerList() {
+        String raw = nflClient.getRawPlayerListJson();
+        if (raw == null) return "null response body";
+        return raw.length() > 4000 ? raw.substring(0, 4000) + "...(truncated)" : raw;
     }
 }
