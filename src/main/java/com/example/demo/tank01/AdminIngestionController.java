@@ -18,9 +18,11 @@ public class AdminIngestionController {
     private static final DateTimeFormatter GAME_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     private final MlbIngestionService mlbIngestionService;
+    private final NflIngestionService nflIngestionService;
 
-    public AdminIngestionController(MlbIngestionService mlbIngestionService) {
+    public AdminIngestionController(MlbIngestionService mlbIngestionService, NflIngestionService nflIngestionService) {
         this.mlbIngestionService = mlbIngestionService;
+        this.nflIngestionService = nflIngestionService;
     }
 
     @GetMapping("/admin/ingest-mlb")
@@ -105,5 +107,22 @@ public class AdminIngestionController {
     @GetMapping("/admin/recompute-player")
     public String recomputePlayer(@RequestParam String name) {
         return mlbIngestionService.recomputePricesForPlayer(name);
+    }
+
+    // Manually trigger NFL ingestion for a specific week -- e.g. to test the
+    // new NFL pricing without waiting for the scheduled job or an actual
+    // game day. gameDate tags the resulting price_history/RawGameStat rows
+    // (defaults to today if omitted). seasonType defaults to "reg".
+    @GetMapping("/admin/ingest-nfl")
+    public String ingestNfl(
+            @RequestParam int week,
+            @RequestParam int season,
+            @RequestParam(defaultValue = "reg") String seasonType,
+            @RequestParam(required = false) String gameDate
+    ) {
+        String date = gameDate != null ? gameDate
+                : LocalDate.now().format(GAME_DATE_FORMAT);
+        int count = nflIngestionService.ingestNflFantasyData(week, season, seasonType, date);
+        return "Ingested " + count + " NFL records for week " + week + ", " + season + " (" + seasonType + ")";
     }
 }

@@ -119,4 +119,59 @@ public class Tank01Dtos {
         public String longName;
         public String posADP;
     }
+
+    // --- NFL ---
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class NflBoxScoreResponse {
+        public NflBoxScoreBody body;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class NflBoxScoreBody {
+        public List<NflPlayerStat> playerStats;
+    }
+
+    // Same "capture everything unnamed" approach as MlbPlayerStat -- passing
+    // yards/TDs/INTs, rushing yards/TDs, receptions/receiving yards/TDs all
+    // land in rawStats automatically, whatever Tank01 calls each one, so we
+    // don't have to guess every field name up front. fantasyPoints itself
+    // IS named explicitly since that's the one field pricing actually reads.
+    public static class NflPlayerStat {
+        public String playerID;
+        public String longName;
+        public String team;
+        // e.g. "QB", "RB", "WR", "TE", "K" -- used to filter to skill
+        // positions and to pick the right pricing baseline.
+        public String pos;
+        public String fantasyPoints;
+
+        private final Map<String, Object> rawStats = new HashMap<>();
+
+        @JsonAnySetter
+        public void captureUnknownField(String key, Object value) {
+            rawStats.put(key, value);
+        }
+
+        public Map<String, Object> getRawStats() {
+            return rawStats;
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class NflPlayerListResponse {
+        public List<NflPlayerInfo> body;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class NflPlayerInfo {
+        public String playerID;
+        public String longName;
+        public String team;
+        public String pos;
+        // Tank01's own ID isn't the same as ESPN's -- this is what lets us
+        // build a real headshot URL (espncdn.com/i/headshots/nfl/players/full/{espnID}.png),
+        // same pattern already used for the placeholder NFL roster.
+        public String espnID;
+    }
 }

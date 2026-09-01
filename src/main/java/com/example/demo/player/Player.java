@@ -85,6 +85,12 @@ public class Player {
     // them). See MlbSeasonStatsService for how this decides "SP" vs "RP".
     private Integer gamesStarted;
 
+    // NFL only -- ESPN's own player ID, separate from externalId (which
+    // stays Tank01's ID, since that's what box scores are keyed by). Used
+    // purely to build a headshot URL, same CDN pattern the placeholder NFL
+    // roster already used.
+    private String espnId;
+
     // Getters and setters
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -179,10 +185,16 @@ public class Player {
     public Integer getGamesStarted() { return gamesStarted; }
     public void setGamesStarted(Integer gamesStarted) { this.gamesStarted = gamesStarted; }
 
+    public String getEspnId() { return espnId; }
+    public void setEspnId(String espnId) { this.espnId = espnId; }
+
     public String getImageUrl() {
         if ("MLB".equals(sport) && externalId != null) {
             return "https://img.mlbstatic.com/mlb-photos/image/upload/w_213,q_60/v1/people/"
                     + externalId + "/headshot/67/current";
+        }
+        if ("NFL".equals(sport) && espnId != null) {
+            return "https://a.espncdn.com/i/headshots/nfl/players/full/" + espnId + ".png";
         }
         return null;
     }
