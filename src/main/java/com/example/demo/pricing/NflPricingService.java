@@ -57,15 +57,36 @@ public class NflPricingService {
 
     private static final double LEAGUE_AVG_ADP_BONUS = 50.0;
 
-    // NFL's own weights -- deliberately different from MLB's (15/50/20/15).
-    // Season performance carries a bit less weight here (45% vs MLB's 50%)
-    // and recent form a lot more (25% vs 15%), since "recent" for NFL means
-    // the last 2-3 games out of a 17-game season -- a much bigger, more
-    // meaningful slice of the season than MLB's last couple weeks out of 162.
-    private static final double BASE_RECENT_PERFORMANCE_WEIGHT = 0.25;
-    private static final double BASE_SEASON_PERFORMANCE_WEIGHT = 0.45;
+    // NFL's own weights. Season-long performance is the biggest piece (a
+    // full season says more than a hot/cold stretch), recent form is a
+    // smaller signal on top of it, projection matters most early in the
+    // season before real stats pile up, ADP adds a market-expectations
+    // signal, and positional value is a small, deliberately-capped nudge so
+    // an elite QB prices appropriately without position alone dominating.
+    private static final double BASE_RECENT_PERFORMANCE_WEIGHT = 0.15;
+    private static final double BASE_SEASON_PERFORMANCE_WEIGHT = 0.40;
     private static final double BASE_PROJECTION_WEIGHT = 0.20;
-    private static final double BASE_ADP_WEIGHT = 0.10;
+    private static final double BASE_ADP_WEIGHT = 0.15;
+    private static final double BASE_POSITIONAL_VALUE_WEIGHT = 0.10;
+
+    // Reflects each position's overall importance/scarcity, independent of
+    // any individual player's stats. Only QB/RB/WR/TE are actually priced
+    // today (see SKILL_POSITIONS in NflIngestionService) -- OT/EDGE/CB are
+    // listed for completeness/future expansion but never looked up since no
+    // Player row exists at those positions.
+    private static final Map<String, Double> POSITIONAL_VALUE_BY_POSITION = Map.of(
+            "QB", 100.0,
+            "OT", 90.0,
+            "EDGE", 90.0,
+            "WR", 85.0,
+            "CB", 85.0,
+            "RB", 70.0,
+            "TE", 65.0
+    );
+    // Average of just the 4 positions actually in use today (100+85+70+65)/4
+    // -- this is the denominator that turns each position's raw value into a
+    // ratio centered around 1.0, same pattern as every other factor here.
+    private static final double LEAGUE_AVG_POSITIONAL_VALUE = 80.0;
 
     private final PriceHistoryRepository priceHistoryRepository;
 
@@ -95,12 +116,15 @@ public class NflPricingService {
         double seasonRatio = calculateSeasonRatio(player, leagueAvgPoints);
         double projectionRatio = weeklyProjection != null ? weeklyProjection / leagueAvgPoints : 1.0;
         double adpRatio = adpBonus != null ? adpBonus / LEAGUE_AVG_ADP_BONUS : 0.0;
+        double positionalValueRatio = POSITIONAL_VALUE_BY_POSITION
+                .getOrDefault(player.getPosition(), LEAGUE_AVG_POSITIONAL_VALUE) / LEAGUE_AVG_POSITIONAL_VALUE;
 
         double[] weights = calculateEffectiveWeights(player);
         double compositeRatio = weights[0] * recentRatio +
                 weights[1] * seasonRatio +
                 weights[2] * projectionRatio +
-                weights[3] * adpRatio;
+                weights[3] * adpRatio +
+                weights[4] * positionalValueRatio;
 
         double targetPrice = Math.max(MIN_PRICE, 100.0 * compositeRatio);
 
@@ -139,7 +163,16 @@ public class NflPricingService {
         double projectionWeight = BASE_PROJECTION_WEIGHT + freedUpWeight * projectionShare;
         double adpWeight = BASE_ADP_WEIGHT + freedUpWeight * adpShare;
 
-        return new double[]{recentWeight, seasonWeight, projectionWeight, adpWeight};
+        // Positional value isn't a "how has this player performed" signal --
+        // it's a static property of their position -- so it doesn't shrink
+        // for low-sample players the way recent/season do, and doesn't
+        // participate in the confidence redistribution above. It stays at
+        // its base weight always, which is what keeps the overall total at
+        // 1.0 regardless of confidence (recentWeight + seasonWeight +
+        // freedUpWeight always sums to BASE_RECENT + BASE_SEASON, so adding
+        // a constant BASE_POSITIONAL_VALUE_WEIGHT on top still adds up to
+        // the full 1.0 weight budget).
+        return new double[]{recentWeight, seasonWeight, projectionWeight, adpWeight, BASE_POSITIONAL_VALUE_WEIGHT};
     }
 
     // No OPS/ERA equivalent tracked for NFL yet, so season performance is
