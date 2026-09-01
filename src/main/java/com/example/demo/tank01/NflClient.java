@@ -124,6 +124,7 @@ public class NflClient {
             if (response == null || response.body == null) return List.of();
             return response.body.stream().map(g -> g.gameID).collect(Collectors.toList());
         } catch (Exception e) {
+            System.out.println("NflClient.getGameIdsForWeek failed: " + e);
             return List.of();
         }
     }
@@ -152,6 +153,7 @@ public class NflClient {
             }
             return response.body.playerStats;
         } catch (Exception e) {
+            System.out.println("NflClient.getBoxScore failed: " + e);
             return List.of();
         }
     }
@@ -167,7 +169,19 @@ public class NflClient {
                 .encode()
                 .toUriString();
         HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());
-        return restTemplate.exchange(url, HttpMethod.GET, entity, String.class).getBody();
+        try {
+            return restTemplate.exchange(url, HttpMethod.GET, entity, String.class).getBody();
+        } catch (org.springframework.web.client.HttpStatusCodeException e) {
+            // RestTemplate throws (instead of just returning the body) on any
+            // non-2xx response -- that's almost certainly why the earlier
+            // "0 players seeded" happened. Surfacing the real status code +
+            // Tank01's own error body here instead of letting it bubble up
+            // as a generic 500, so the actual cause (bad key, not
+            // subscribed to this product, rate limited, etc.) is visible.
+            return "HTTP " + e.getStatusCode() + " from Tank01: " + e.getResponseBodyAsString();
+        } catch (Exception e) {
+            return "Request failed: " + e;
+        }
     }
 
     // Keyed by Tank01's playerID -- includes name/team/position/espnID so
@@ -201,6 +215,7 @@ public class NflClient {
             }
         } catch (Exception e) {
             // Fall through with whatever we managed to collect (likely empty).
+            System.out.println("NflClient.getPlayerInfoMap failed: " + e);
         }
 
         cachedPlayerInfo = playerInfo;
@@ -250,6 +265,7 @@ public class NflClient {
         } catch (Exception e) {
             // Keep projections empty -- computeCompositeRatio treats a
             // missing projection as neutral (ratio of 1.0), not a crash.
+            System.out.println("NflClient.getProjections failed: " + e);
         }
 
         cachedProjections = projections;
@@ -290,6 +306,7 @@ public class NflClient {
         } catch (Exception e) {
             // Keep adpMap empty -- treated as neutral (ratio of 0.0), same
             // as any player Tank01 just doesn't have ADP data for.
+            System.out.println("NflClient.getAdpMap failed: " + e);
         }
 
         cachedAdpMap = adpMap;
