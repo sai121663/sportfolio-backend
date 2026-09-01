@@ -182,4 +182,22 @@ public class Tank01Dtos {
         // same pattern already used for the placeholder NFL roster.
         public String espnID;
     }
+
+    // Confirmed against a real getNFLTeamRoster response -- same wrapping
+    // shape as the global player list (body is an object, not the array
+    // itself), but here the array lives under "roster" instead of
+    // "players". Each roster entry has every field NflPlayerInfo needs
+    // (playerID, longName, team, pos, espnID) plus dozens more we don't
+    // use (injury, draftInfo, stats, etc.) -- ignoreUnknown drops those
+    // automatically.
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class NflTeamRosterResponse {
+        public NflTeamRosterBody body;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class NflTeamRosterBody {
+        public String team;
+        public List<NflPlayerInfo> roster;
+    }
 }

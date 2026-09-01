@@ -37,6 +37,21 @@ public class NflClient {
     private static final String HOST = "tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com";
     private final RestTemplate restTemplate = new RestTemplate();
 
+    // Standard 3-letter team abbreviations, used to loop getNFLTeamRoster
+    // over every team since Tank01 doesn't offer a "give me all 32 rosters
+    // in one call" endpoint. These are the conventional codes shared across
+    // most sports data providers (ESPN, ours already matches on box scores
+    // like "CLE@CHI") -- if a couple turn out to be off (e.g. a franchise
+    // Tank01 codes differently), that team's roster call will just come
+    // back empty rather than error, so it fails soft. Worth double
+    // -checking against a real getNFLTeams response once available.
+    private static final List<String> ALL_TEAM_ABBREVIATIONS = List.of(
+            "ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE",
+            "DAL", "DEN", "DET", "GB", "HOU", "IND", "JAX", "KC",
+            "LAC", "LAR", "LV", "MIA", "MIN", "NE", "NO", "NYG",
+            "NYJ", "PHI", "PIT", "SF", "SEA", "TB", "TEN", "WAS"
+    );
+
     // Same reasoning as MlbClient's cache -- the full player list and
     // season projections barely change day to day, so there's no reason to
     // re-fetch them on every call within the same ingestion run.
@@ -141,6 +156,23 @@ public class NflClient {
         return rawGet(url);
     }
 
+    // Considering switching getPlayerInfoMap over to loop through this
+    // (once per team) instead of the single global getNFLPlayerList call --
+    // real rosters showed players in genuinely wrong team slots (Justin
+    // Fields on KC instead of Mahomes) even with all=true, suggesting that
+    // global list lags behind trades/signings in a way a per-team roster
+    // pull might not.
+    public String getRawTeamRosterJson(String teamAbv) {
+        String url = UriComponentsBuilder.fromUriString("https://" + HOST + "/getNFLTeamRoster")
+                .queryParam("teamAbv", teamAbv)
+                .queryParam("getStats", "true")
+                .queryParam("fantasyPoints", "true")
+                .build()
+                .encode()
+                .toUriString();
+        return rawGet(url);
+    }
+
     // NFL games are weekly, not daily -- week/season/seasonType together
     // identify a slate of games the same way a single gameDate does for MLB.
     public List<String> getGameIdsForWeek(int week, int season, String seasonType) {
@@ -224,40 +256,54 @@ public class NflClient {
     // Keyed by Tank01's playerID -- includes name/team/position/espnID so
     // NflIngestionService doesn't need a second lookup just to filter to
     // skill positions or build a headshot URL.
+    //
+    // Switched from the single global getNFLPlayerList?all=true call to
+    // looping getNFLTeamRoster over all 32 teams -- confirmed via real
+    // responses that the global list has stale team assignments for at
+    // least a couple notable players (Mahomes, Josh Allen both missing/
+    // misassigned) even with all=true. Costs 32 Tank01 calls instead of 1,
+    // but only pays that cost once per 24h cache window, same as before.
     public Map<String, Tank01Dtos.NflPlayerInfo> getPlayerInfoMap() {
         if (!isExpired(playerInfoCachedAt)) {
             return cachedPlayerInfo;
         }
 
-        // all=true -- without it, this only returns a partial/notable-players
-        // subset instead of the full league roster.
-        String url = UriComponentsBuilder.fromUriString("https://" + HOST + "/getNFLPlayerList")
-                .queryParam("all", "true")
-                .build()
-                .encode()
-                .toUriString();
         Map<String, Tank01Dtos.NflPlayerInfo> playerInfo = new HashMap<>();
-        try {
-            HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());
-            Tank01Dtos.NflPlayerListResponse response = restTemplate.exchange(
-                    url, HttpMethod.GET, entity, Tank01Dtos.NflPlayerListResponse.class
-            ).getBody();
-
-            if (response != null && response.body != null && response.body.players != null) {
-                for (Tank01Dtos.NflPlayerInfo p : response.body.players) {
-                    if (p.playerID != null) {
-                        playerInfo.put(p.playerID, p);
-                    }
+        for (String teamAbv : ALL_TEAM_ABBREVIATIONS) {
+            for (Tank01Dtos.NflPlayerInfo p : getTeamRoster(teamAbv)) {
+                if (p.playerID != null) {
+                    playerInfo.put(p.playerID, p);
                 }
             }
-        } catch (Exception e) {
-            // Fall through with whatever we managed to collect (likely empty).
-            System.out.println("NflClient.getPlayerInfoMap failed: " + e);
         }
 
         cachedPlayerInfo = playerInfo;
         playerInfoCachedAt = Instant.now();
         return playerInfo;
+    }
+
+    private List<Tank01Dtos.NflPlayerInfo> getTeamRoster(String teamAbv) {
+        String url = UriComponentsBuilder.fromUriString("https://" + HOST + "/getNFLTeamRoster")
+                .queryParam("teamAbv", teamAbv)
+                .queryParam("getStats", "true")
+                .queryParam("fantasyPoints", "true")
+                .build()
+                .encode()
+                .toUriString();
+
+        try {
+            HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());
+            Tank01Dtos.NflTeamRosterResponse response = restTemplate.exchange(
+                    url, HttpMethod.GET, entity, Tank01Dtos.NflTeamRosterResponse.class
+            ).getBody();
+
+            if (response != null && response.body != null && response.body.roster != null) {
+                return response.body.roster;
+            }
+        } catch (Exception e) {
+            System.out.println("NflClient.getTeamRoster failed for " + teamAbv + ": " + e);
+        }
+        return List.of();
     }
 
     // Tank01's NFL projections are WEEKLY (unlike MLB's 7-day-ahead

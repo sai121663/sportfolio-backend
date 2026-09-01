@@ -164,6 +164,11 @@ public class AdminIngestionController {
         return truncate(nflClient.getRawBoxScoreJson(gameID));
     }
 
+    @GetMapping("/admin/debug-nfl-team-roster")
+    public String debugNflTeamRoster(@RequestParam String teamAbv) {
+        return truncate(nflClient.getRawTeamRosterJson(teamAbv));
+    }
+
     // TEMPORARY -- searches the PARSED player list (using the now-fixed
     // body.players shape) for a name substring, so we can see exactly what
     // Tank01 says for a specific player (team, position, playerID) instead
