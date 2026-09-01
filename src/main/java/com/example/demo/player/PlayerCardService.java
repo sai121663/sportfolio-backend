@@ -40,12 +40,18 @@ public class PlayerCardService {
     public List<PlayerCardDto> buildCards(List<Player> players) {
         String cutoff = LocalDate.now(MLB_ZONE).minusDays(HISTORY_WINDOW_DAYS).format(GAME_DATE_FORMAT);
 
+        // Date-only / no-filter queries -- see findByGameDateGreaterThanEqual
+        // and findAllPriceRanges' comments. `players` here is always "every
+        // player in the DB" (PlayerController calls this with findAll()), so
+        // filtering by an explicit player-ID IN-clause was redundant AND the
+        // thing that was crashing the DB connection once the combined
+        // MLB+NFL roster pushed it past ~1,900 parameters.
         Map<Long, List<PriceHistory>> historyByPlayer = priceHistoryRepository
-                .findByPlayerInAndGameDateGreaterThanEqual(players, cutoff).stream()
+                .findByGameDateGreaterThanEqual(cutoff).stream()
                 .collect(Collectors.groupingBy(h -> h.getPlayer().getId()));
 
         Map<Long, PlayerPriceRange> rangeByPlayer = priceHistoryRepository
-                .findPriceRangeByPlayers(players).stream()
+                .findAllPriceRanges().stream()
                 .collect(Collectors.toMap(PlayerPriceRange::getPlayerId, r -> r));
 
         Map<Long, List<Holding>> holdingsByPlayer = holdingRepository.findByPlayerIn(players).stream()

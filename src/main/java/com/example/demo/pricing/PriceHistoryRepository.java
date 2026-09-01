@@ -23,6 +23,19 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
 
     List<PriceHistory> findByPlayerInAndGameDateGreaterThanEqual(List<Player> players, String gameDate);
 
+    // Used by PlayerCardService.buildCards, which is always called with
+    // EVERY player in the DB (PlayerController's /players hits it with
+    // playerRepository.findAll()) -- once NFL players were added on top of
+    // MLB's roster, that pushed the player-list IN-clause the
+    // player-scoped query above generates to ~1,900 bind parameters in a
+    // single statement, which was crashing/dropping the DB connection
+    // (SSL "unexpected eof"/"connection reset by peer" in the Railway
+    // Postgres logs, right after that exact query). Since the caller
+    // always wants "every player" anyway, filtering by date only avoids
+    // the giant parameter list entirely -- same result rows, no risk of
+    // the IN-clause growing unbounded as the roster grows further.
+    List<PriceHistory> findByGameDateGreaterThanEqual(String gameDate);
+
     // The batched replacements for the per-player queries above -- one query
     // covering every player in the list at once, instead of one query per
     // player. Used by MlbIngestionService during multi-day backfills, where
@@ -34,6 +47,15 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
     @Query("SELECT ph.player.id AS playerId, MAX(ph.price) AS maxPrice, MIN(ph.price) AS minPrice " +
            "FROM PriceHistory ph WHERE ph.player IN :players GROUP BY ph.player.id")
     List<PlayerPriceRange> findPriceRangeByPlayers(@Param("players") List<Player> players);
+
+    // Same "every player anyway" reasoning as findByGameDateGreaterThanEqual
+    // above -- no player filter needed since buildCards always wants every
+    // player's range, so this drops the giant IN-clause that was blowing up
+    // parameter counts. Not date-bounded (season high/low is meant to be
+    // all-time), same as the query it replaces.
+    @Query("SELECT ph.player.id AS playerId, MAX(ph.price) AS maxPrice, MIN(ph.price) AS minPrice " +
+           "FROM PriceHistory ph GROUP BY ph.player.id")
+    List<PlayerPriceRange> findAllPriceRanges();
 
     // Replaces the default deleteAll(), which loads every row into memory as
     // a managed entity before deleting them one at a time -- fine for a

@@ -5,7 +5,14 @@ import jakarta.persistence.*;
 import java.time.Instant;
 
 @Entity
-@Table(indexes = @Index(name = "idx_price_history_player_gamedate", columnList = "player_id, game_date"))
+@Table(indexes = {
+        @Index(name = "idx_price_history_player_gamedate", columnList = "player_id, game_date"),
+        // Added alongside the switch to a date-only (no player filter) query
+        // for building /players cards -- the composite index above can't be
+        // used efficiently for a plain "game_date >= ?" scan since player_id
+        // is its leading column.
+        @Index(name = "idx_price_history_gamedate", columnList = "game_date")
+})
 public class PriceHistory {
 
     @Id
