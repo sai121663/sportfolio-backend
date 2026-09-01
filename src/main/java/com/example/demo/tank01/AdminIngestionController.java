@@ -164,6 +164,21 @@ public class AdminIngestionController {
         return truncate(nflClient.getRawBoxScoreJson(gameID));
     }
 
+    // TEMPORARY -- searches the PARSED player list (using the now-fixed
+    // body.players shape) for a name substring, so we can see exactly what
+    // Tank01 says for a specific player (team, position, playerID) instead
+    // of guessing why they're missing from the seeded set.
+    @GetMapping("/admin/debug-nfl-player")
+    public java.util.List<Tank01Dtos.NflPlayerInfo> debugNflPlayer(@RequestParam String name) {
+        java.util.List<Tank01Dtos.NflPlayerInfo> matches = new java.util.ArrayList<>();
+        for (Tank01Dtos.NflPlayerInfo p : nflClient.getPlayerInfoMap().values()) {
+            if (p.longName != null && p.longName.toLowerCase().contains(name.toLowerCase())) {
+                matches.add(p);
+            }
+        }
+        return matches;
+    }
+
     private String truncate(String raw) {
         if (raw == null) return "null response body";
         return raw.length() > 4000 ? raw.substring(0, 4000) + "...(truncated)" : raw;
