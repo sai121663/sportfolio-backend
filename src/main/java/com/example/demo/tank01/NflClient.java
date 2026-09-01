@@ -104,6 +104,43 @@ public class NflClient {
                 .queryParam("idpFumblesRecovered", "0");
     }
 
+    // TEMPORARY debug helpers -- same reasoning as getRawPlayerListJson,
+    // which caught a real shape bug (body wraps an object, not a direct
+    // list/map) that the schedule endpoint below almost certainly shares.
+    // Remove once getGameIdsForWeek/getBoxScore are confirmed working
+    // against real responses.
+    private String rawGet(String url) {
+        HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());
+        try {
+            return restTemplate.exchange(url, HttpMethod.GET, entity, String.class).getBody();
+        } catch (org.springframework.web.client.HttpStatusCodeException e) {
+            return "HTTP " + e.getStatusCode() + " from Tank01: " + e.getResponseBodyAsString();
+        } catch (Exception e) {
+            return "Request failed: " + e;
+        }
+    }
+
+    public String getRawGamesForWeekJson(int week, int season, String seasonType) {
+        String url = UriComponentsBuilder.fromUriString("https://" + HOST + "/getNFLGamesForWeek")
+                .queryParam("week", week)
+                .queryParam("season", season)
+                .queryParam("seasonType", seasonType)
+                .build()
+                .encode()
+                .toUriString();
+        return rawGet(url);
+    }
+
+    public String getRawBoxScoreJson(String gameId) {
+        String url = addScoringWeights(
+                UriComponentsBuilder.fromUriString("https://" + HOST + "/getNFLBoxScore")
+                        .queryParam("gameID", gameId)
+                        .queryParam("fantasyPoints", "true")
+                        .queryParam("playByPlay", "false")
+        ).build().encode().toUriString();
+        return rawGet(url);
+    }
+
     // NFL games are weekly, not daily -- week/season/seasonType together
     // identify a slate of games the same way a single gameDate does for MLB.
     public List<String> getGameIdsForWeek(int week, int season, String seasonType) {
@@ -206,8 +243,8 @@ public class NflClient {
                     url, HttpMethod.GET, entity, Tank01Dtos.NflPlayerListResponse.class
             ).getBody();
 
-            if (response != null && response.body != null) {
-                for (Tank01Dtos.NflPlayerInfo p : response.body) {
+            if (response != null && response.body != null && response.body.players != null) {
+                for (Tank01Dtos.NflPlayerInfo p : response.body.players) {
                     if (p.playerID != null) {
                         playerInfo.put(p.playerID, p);
                     }

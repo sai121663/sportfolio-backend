@@ -160,7 +160,15 @@ public class Tank01Dtos {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class NflPlayerListResponse {
-        public List<NflPlayerInfo> body;
+        public NflPlayerListBody body;
+    }
+
+    // Confirmed against a real response -- "body" is an object wrapping the
+    // list under "players", not the list itself (unlike most other Tank01
+    // responses in this file, where "body" IS the array/map directly).
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class NflPlayerListBody {
+        public List<NflPlayerInfo> players;
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

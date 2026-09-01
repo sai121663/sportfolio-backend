@@ -143,7 +143,28 @@ public class AdminIngestionController {
     // NflClient.getPlayerInfoMap's parsing is confirmed correct.
     @GetMapping("/admin/debug-nfl-player-list")
     public String debugNflPlayerList() {
-        String raw = nflClient.getRawPlayerListJson();
+        return truncate(nflClient.getRawPlayerListJson());
+    }
+
+    // TEMPORARY -- same idea, for the two still-unverified NFL endpoints.
+    // Use a PAST week/season (real completed games already exist, e.g.
+    // week=1&season=2025&seasonType=reg) so this can be tested right now
+    // without waiting for the current season to start.
+    @GetMapping("/admin/debug-nfl-schedule")
+    public String debugNflSchedule(
+            @RequestParam int week,
+            @RequestParam int season,
+            @RequestParam(defaultValue = "reg") String seasonType
+    ) {
+        return truncate(nflClient.getRawGamesForWeekJson(week, season, seasonType));
+    }
+
+    @GetMapping("/admin/debug-nfl-box-score")
+    public String debugNflBoxScore(@RequestParam String gameID) {
+        return truncate(nflClient.getRawBoxScoreJson(gameID));
+    }
+
+    private String truncate(String raw) {
         if (raw == null) return "null response body";
         return raw.length() > 4000 ? raw.substring(0, 4000) + "...(truncated)" : raw;
     }
