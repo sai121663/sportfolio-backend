@@ -57,10 +57,15 @@ public class NflPricingService {
 
     private static final double LEAGUE_AVG_ADP_BONUS = 50.0;
 
-    private static final double BASE_RECENT_PERFORMANCE_WEIGHT = 0.15;
-    private static final double BASE_SEASON_PERFORMANCE_WEIGHT = 0.50;
+    // NFL's own weights -- deliberately different from MLB's (15/50/20/15).
+    // Season performance carries a bit less weight here (45% vs MLB's 50%)
+    // and recent form a lot more (25% vs 15%), since "recent" for NFL means
+    // the last 2-3 games out of a 17-game season -- a much bigger, more
+    // meaningful slice of the season than MLB's last couple weeks out of 162.
+    private static final double BASE_RECENT_PERFORMANCE_WEIGHT = 0.25;
+    private static final double BASE_SEASON_PERFORMANCE_WEIGHT = 0.45;
     private static final double BASE_PROJECTION_WEIGHT = 0.20;
-    private static final double BASE_ADP_WEIGHT = 0.15;
+    private static final double BASE_ADP_WEIGHT = 0.10;
 
     private final PriceHistoryRepository priceHistoryRepository;
 

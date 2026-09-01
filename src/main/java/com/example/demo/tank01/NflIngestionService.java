@@ -170,6 +170,68 @@ public class NflIngestionService {
         return updatedCount;
     }
 
+    // Gives every skill-position player a real starting price BEFORE any
+    // games have been played, using just their roster info + preseason
+    // projection + ADP -- no box scores needed. This works because
+    // NflPricingService already leans entirely on projection/ADP when
+    // gamesPlayed is 0 (recent/season weight naturally redistributes to
+    // them, same confidence mechanism used once real games start rolling
+    // in) -- this method just needs to call it once per player. Safe to
+    // re-run any time before kickoff (e.g. after Tank01 updates its
+    // projections) -- gamesPlayed stays untouched, so it never fakes real
+    // game history, and an already-seeded player just gets a gentle nudge
+    // toward the refreshed target instead of a jump.
+    public int seedNflPricesFromProjections() {
+        Map<String, Tank01Dtos.NflPlayerInfo> playerInfoMap = nflClient.getPlayerInfoMap();
+        Map<String, Tank01Dtos.PlayerProjection> projections = nflClient.getProjections();
+        Map<String, Double> adpMap = nflClient.getAdpMap();
+
+        String seedDate = LocalDate.now(ET_ZONE).format(GAME_DATE_FORMAT);
+        int seededCount = 0;
+
+        for (Tank01Dtos.NflPlayerInfo info : playerInfoMap.values()) {
+            if (info.playerID == null || !SKILL_POSITIONS.contains(info.pos)) continue;
+
+            Player player = playerRepository.findByExternalId(info.playerID)
+                    .orElseGet(Player::new);
+
+            player.setExternalId(info.playerID);
+            player.setName(info.longName);
+            player.setTeam(info.team);
+            player.setSport("NFL");
+            player.setPosition(info.pos);
+            if (info.espnID != null) {
+                player.setEspnId(info.espnID);
+            }
+
+            Tank01Dtos.PlayerProjection projection = projections.get(info.playerID);
+            Double weeklyProjection = (projection != null && projection.fantasyPoints != null)
+                    ? Double.parseDouble(projection.fantasyPoints) : null;
+
+            Double adpBonus = null;
+            Double adp = adpMap.get(info.playerID);
+            if (adp != null) {
+                adpBonus = Math.max(0.0, 100.0 * (1 - adp / 300.0));
+            }
+
+            player.setWeeklyProjection(weeklyProjection);
+            player.setAdpBonus(adpBonus);
+
+            playerRepository.save(player);
+            // No fantasyPoints, no RawGameStat archive, gamesPlayed untouched
+            // -- this is explicitly NOT a real game, just an opening price.
+            nflPricingService.updatePrice(player, seedDate, weeklyProjection, adpBonus, null);
+            playerRepository.save(player);
+            seededCount++;
+
+            if (seededCount % FLUSH_EVERY_N_RECORDS == 0) {
+                entityManager.clear();
+            }
+        }
+
+        return seededCount;
+    }
+
     private void archiveRawGameStat(Player player, String gameDate, Double fantasyPoints, String rawStatsJson) {
         if (rawGameStatRepository.existsByPlayerAndGameDate(player, gameDate)) {
             return;

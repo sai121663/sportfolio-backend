@@ -125,4 +125,13 @@ public class AdminIngestionController {
         int count = nflIngestionService.ingestNflFantasyData(week, season, seasonType, date);
         return "Ingested " + count + " NFL records for week " + week + ", " + season + " (" + seasonType + ")";
     }
+
+    // Gives every skill-position NFL player a real starting price from
+    // projection/ADP alone -- no games needed, so this can run before the
+    // season even starts. Safe to re-run any time before kickoff.
+    @GetMapping("/admin/seed-nfl-prices")
+    public String seedNflPrices() {
+        int count = nflIngestionService.seedNflPricesFromProjections();
+        return "Seeded starting prices for " + count + " NFL skill-position players.";
+    }
 }
