@@ -1,12 +1,15 @@
 // AdminIngestionController.java
 package com.example.demo.tank01;
 
+import com.example.demo.player.Player;
+import com.example.demo.player.PlayerRepository;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 
 // TEMPORARY -- lets you manually trigger MLB ingestion for any date, e.g. to
 // backfill yesterday and test that the new price formula moves prices across
@@ -20,11 +23,13 @@ public class AdminIngestionController {
     private final MlbIngestionService mlbIngestionService;
     private final NflIngestionService nflIngestionService;
     private final NflClient nflClient;
+    private final PlayerRepository playerRepository;
 
-    public AdminIngestionController(MlbIngestionService mlbIngestionService, NflIngestionService nflIngestionService, NflClient nflClient) {
+    public AdminIngestionController(MlbIngestionService mlbIngestionService, NflIngestionService nflIngestionService, NflClient nflClient, PlayerRepository playerRepository) {
         this.mlbIngestionService = mlbIngestionService;
         this.nflIngestionService = nflIngestionService;
         this.nflClient = nflClient;
+        this.playerRepository = playerRepository;
     }
 
     @GetMapping("/admin/ingest-mlb")
@@ -187,5 +192,46 @@ public class AdminIngestionController {
     private String truncate(String raw) {
         if (raw == null) return "null response body";
         return raw.length() > 4000 ? raw.substring(0, 4000) + "...(truncated)" : raw;
+    }
+
+    // TEMPORARY -- zero Tank01 cost (reads only what's already stored on the
+    // Player row from the last seed/ingestion, no live API call) so you can
+    // see, in human terms, WHY a given player is priced where they are.
+    // Deliberately only surfaces the two inputs a person can actually reason
+    // about -- what Tank01 projects them to score, and roughly where they're
+    // being drafted -- rather than raw internal ratios/weights.
+    @GetMapping("/admin/debug-nfl-price-factors")
+    public List<PriceFactorsDto> debugNflPriceFactors(@RequestParam String name) {
+        String needle = name.toLowerCase();
+        return playerRepository.findAll().stream()
+                .filter(p -> "NFL".equals(p.getSport()) && p.getName() != null && p.getName().toLowerCase().contains(needle))
+                .map(this::toPriceFactorsDto)
+                .toList();
+    }
+
+    private PriceFactorsDto toPriceFactorsDto(Player p) {
+        PriceFactorsDto dto = new PriceFactorsDto();
+        dto.name = p.getName();
+        dto.team = p.getTeam();
+        dto.position = p.getPosition();
+        dto.price = p.getPrice();
+        dto.projectedFantasyPoints = p.getWeeklyProjection();
+        // adpBonus = max(0, 100*(1-adp/300)) -- inverted back into a rough
+        // "expected overall draft pick" number, since that's the form
+        // people actually think in. Null/0 bonus means Tank01 had no real
+        // ADP data for this player at all (not "drafted last").
+        dto.estimatedDraftPick = (p.getAdpBonus() != null && p.getAdpBonus() > 0)
+                ? Math.round(300.0 * (1 - p.getAdpBonus() / 100.0))
+                : null;
+        return dto;
+    }
+
+    public static class PriceFactorsDto {
+        public String name;
+        public String team;
+        public String position;
+        public Double price;
+        public Double projectedFantasyPoints;
+        public Long estimatedDraftPick;
     }
 }
