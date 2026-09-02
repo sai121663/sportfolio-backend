@@ -57,25 +57,40 @@ public class NflPricingService {
 
     private static final double LEAGUE_AVG_ADP_BONUS = 50.0;
 
-    // NFL's own weights. Season-long performance is the biggest piece (a
-    // full season says more than a hot/cold stretch), recent form is a
+    // NFL's own weights. Season-long performance is still the biggest piece
+    // (a full season says more than a hot/cold stretch), recent form is a
     // smaller signal on top of it, projection matters most early in the
-    // season before real stats pile up, ADP adds a market-expectations
-    // signal, and positional value is a small, deliberately-capped nudge so
-    // an elite QB prices appropriately without position alone dominating.
-    private static final double BASE_RECENT_PERFORMANCE_WEIGHT = 0.15;
-    private static final double BASE_SEASON_PERFORMANCE_WEIGHT = 0.40;
-    private static final double BASE_PROJECTION_WEIGHT = 0.20;
-    private static final double BASE_ADP_WEIGHT = 0.15;
-    private static final double BASE_POSITIONAL_VALUE_WEIGHT = 0.10;
+    // season before real stats pile up, and ADP adds a market-expectations
+    // signal.
+    //
+    // Positional value was bumped from 10% -> 18% (with recent/season/
+    // projection/ADP each scaled down proportionally to make room, so their
+    // relative emphasis versus each other is unchanged) after real seeded
+    // prices showed QB clustering well below RB/WR/TE even at the very top
+    // (elite QB ~$143 vs elite RB ~$195) despite QB having the highest
+    // per-position multiplier. Root cause: RB/WR usage swings hugely game to
+    // game (a bellcow RB might see 25 touches, a committee back 8), so their
+    // stats-driven ratios naturally spread much wider than QB's (nearly
+    // every starter throws a similar 30-40 times/game) -- the old 10% wasn't
+    // enough to counteract that natural compression.
+    private static final double BASE_RECENT_PERFORMANCE_WEIGHT = 0.14;
+    private static final double BASE_SEASON_PERFORMANCE_WEIGHT = 0.36;
+    private static final double BASE_PROJECTION_WEIGHT = 0.18;
+    private static final double BASE_ADP_WEIGHT = 0.14;
+    private static final double BASE_POSITIONAL_VALUE_WEIGHT = 0.18;
 
     // Reflects each position's overall importance/scarcity, independent of
     // any individual player's stats. Only QB/RB/WR/TE are actually priced
     // today (see SKILL_POSITIONS in NflIngestionService) -- OT/EDGE/CB are
     // listed for completeness/future expansion but never looked up since no
     // Player row exists at those positions.
+    //
+    // QB widened from 100 -> 125 (WR/RB/TE unchanged) alongside the weight
+    // bump above -- same reasoning, giving QB a bigger edge over RB/WR/TE
+    // specifically since QB was the position getting compressed, not the
+    // others (their relative order -- RB > WR > TE -- already looked right).
     private static final Map<String, Double> POSITIONAL_VALUE_BY_POSITION = Map.of(
-            "QB", 100.0,
+            "QB", 125.0,
             "OT", 90.0,
             "EDGE", 90.0,
             "WR", 85.0,
@@ -83,10 +98,10 @@ public class NflPricingService {
             "RB", 70.0,
             "TE", 65.0
     );
-    // Average of just the 4 positions actually in use today (100+85+70+65)/4
+    // Average of just the 4 positions actually in use today (125+85+70+65)/4
     // -- this is the denominator that turns each position's raw value into a
     // ratio centered around 1.0, same pattern as every other factor here.
-    private static final double LEAGUE_AVG_POSITIONAL_VALUE = 80.0;
+    private static final double LEAGUE_AVG_POSITIONAL_VALUE = 86.25;
 
     private final PriceHistoryRepository priceHistoryRepository;
 
