@@ -3,12 +3,15 @@ package com.example.demo.tank01;
 
 import com.example.demo.player.Player;
 import com.example.demo.player.PlayerRepository;
+import com.example.demo.pricing.PriceHistory;
+import com.example.demo.pricing.PriceHistoryRepository;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import java.util.List;
 
 // TEMPORARY -- lets you manually trigger MLB ingestion for any date, e.g. to
@@ -24,12 +27,14 @@ public class AdminIngestionController {
     private final NflIngestionService nflIngestionService;
     private final NflClient nflClient;
     private final PlayerRepository playerRepository;
+    private final PriceHistoryRepository priceHistoryRepository;
 
-    public AdminIngestionController(MlbIngestionService mlbIngestionService, NflIngestionService nflIngestionService, NflClient nflClient, PlayerRepository playerRepository) {
+    public AdminIngestionController(MlbIngestionService mlbIngestionService, NflIngestionService nflIngestionService, NflClient nflClient, PlayerRepository playerRepository, PriceHistoryRepository priceHistoryRepository) {
         this.mlbIngestionService = mlbIngestionService;
         this.nflIngestionService = nflIngestionService;
         this.nflClient = nflClient;
         this.playerRepository = playerRepository;
+        this.priceHistoryRepository = priceHistoryRepository;
     }
 
     @GetMapping("/admin/ingest-mlb")
@@ -224,6 +229,57 @@ public class AdminIngestionController {
                 ? Math.round(300.0 * (1 - p.getAdpBonus() / 100.0))
                 : null;
         return dto;
+    }
+
+    // Zero Tank01 cost (DB reads only) -- shows the actual day-by-day
+    // price_history rows for a player plus their live gamesPlayed count, so
+    // you can see directly whether/when a price actually moved instead of
+    // just comparing the current snapshot to memory. Also doubles as a way
+    // to sanity-check gamesPlayed against how many real games the player has
+    // actually played this season -- if it's higher than expected, that's a
+    // sign the daily ingestion job is re-processing an already-counted game
+    // (see NflIngestionService's per-calendar-day dedup key).
+    @GetMapping("/admin/debug-nfl-player-history")
+    public List<PlayerHistoryDto> debugNflPlayerHistory(@RequestParam String name) {
+        String needle = name.toLowerCase();
+        List<PlayerHistoryDto> results = new java.util.ArrayList<>();
+        for (Player p : playerRepository.findAll()) {
+            if (!"NFL".equals(p.getSport()) || p.getName() == null || !p.getName().toLowerCase().contains(needle)) {
+                continue;
+            }
+            PlayerHistoryDto dto = new PlayerHistoryDto();
+            dto.name = p.getName();
+            dto.team = p.getTeam();
+            dto.position = p.getPosition();
+            dto.currentPrice = p.getPrice();
+            dto.gamesPlayed = p.getGamesPlayed();
+            dto.avgFantasyPoints = p.getAvgFantasyPoints();
+            dto.latestFantasyPoints = p.getFantasyPoints();
+
+            List<PriceHistory> history = priceHistoryRepository.findByPlayerOrderByGameDateAsc(p);
+            history.sort(Comparator.comparing(PriceHistory::getGameDate));
+            for (PriceHistory h : history) {
+                PriceHistoryPointDto point = new PriceHistoryPointDto();
+                point.gameDate = h.getGameDate();
+                point.price = h.getPrice();
+                point.fantasyPoints = h.getFantasyPoints();
+                point.recordedAt = h.getRecordedAt() != null ? h.getRecordedAt().toString() : null;
+                dto.history.add(point);
+            }
+            results.add(dto);
+        }
+        return results;
+    }
+
+    public static class PlayerHistoryDto {
+        public String name; public String team; public String position;
+        public Double currentPrice; public Integer gamesPlayed;
+        public Double avgFantasyPoints; public Double latestFantasyPoints;
+        public List<PriceHistoryPointDto> history = new java.util.ArrayList<>();
+    }
+
+    public static class PriceHistoryPointDto {
+        public String gameDate; public Double price; public Double fantasyPoints; public String recordedAt;
     }
 
     public static class PriceFactorsDto {
