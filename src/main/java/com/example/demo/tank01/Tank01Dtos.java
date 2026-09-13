@@ -127,9 +127,16 @@ public class Tank01Dtos {
         public NflBoxScoreBody body;
     }
 
+    // playerStats comes back as a JSON OBJECT keyed by Tank01 playerID
+    // (e.g. {"4036135": {...}, "4035840": {...}}), NOT an array -- confirmed
+    // against a real getNFLBoxScore response. This was originally typed as
+    // List<NflPlayerStat>, which Jackson can't map a JSON object into; that
+    // silently threw inside NflClient.getBoxScore's try/catch and made every
+    // box score call return an empty list, so no NFL game has ever actually
+    // been ingested despite games being played.
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class NflBoxScoreBody {
-        public List<NflPlayerStat> playerStats;
+        public Map<String, NflPlayerStat> playerStats;
     }
 
     // Same "capture everything unnamed" approach as MlbPlayerStat -- passing

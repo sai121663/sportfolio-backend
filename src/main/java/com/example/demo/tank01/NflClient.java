@@ -220,7 +220,7 @@ public class NflClient {
             if (response == null || response.body == null || response.body.playerStats == null) {
                 return List.of();
             }
-            return response.body.playerStats;
+            return new java.util.ArrayList<>(response.body.playerStats.values());
         } catch (Exception e) {
             System.out.println("NflClient.getBoxScore failed: " + e);
             return List.of();
